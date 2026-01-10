@@ -6,7 +6,7 @@ from streamlit_gsheets import GSheetsConnection
 # --- CONFIGURAÇÕES INICIAIS ---
 st.set_page_config(page_title="Sistema Mercadinho", layout="wide")
 
-# Lista de Categorias solicitada
+# Lista de Categorias
 CATEGORIAS = [
     "Mercadoria", "Frete", "Energia", "Comissão", "Manutenção", "Combustível",
     "Salário", "13° Salário", "Férias", "Simples Nacional", "INSS", "FGTS",
@@ -19,26 +19,40 @@ CATEGORIAS = [
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def carregar_dados():
-    # Carrega a aba de lançamentos
-    return conn.read(worksheet="lancamentos", ttl=0)
+    try:
+        return conn.read(worksheet="lancamentos", ttl=0)
+    except:
+        return pd.DataFrame()
 
 def carregar_fornecedores():
-    # Carrega a aba de fornecedores
-    df = conn.read(worksheet="fornecedores", ttl=0)
-    return df['nome'].dropna().unique().tolist()
+    try:
+        df = conn.read(worksheet="fornecedores", ttl=0)
+        return df['nome'].dropna().unique().tolist()
+    except:
+        return []
 
 def salvar_fornecedor(novo_nome):
-    df = conn.read(worksheet="fornecedores", ttl=0)
-    if novo_nome not in df['nome'].values:
+    try:
+        df = conn.read(worksheet="fornecedores", ttl=0)
+        if novo_nome and novo_nome not in df['nome'].values:
+            novo_registro = pd.DataFrame([{"nome": novo_nome}])
+            df_atualizado = pd.concat([df, novo_registro], ignore_index=True)
+            conn.update(worksheet="fornecedores", data=df_atualizado)
+    except:
+        # Se falhar na leitura (tabela vazia), cria a primeira linha
         novo_registro = pd.DataFrame([{"nome": novo_nome}])
-        df_atualizado = pd.concat([df, novo_registro], ignore_index=True)
-        conn.update(worksheet="fornecedores", data=df_atualizado)
+        conn.update(worksheet="fornecedores", data=novo_registro)
 
 def salvar_lancamento(dados):
-    df = conn.read(worksheet="lancamentos", ttl=0)
-    novo_df = pd.DataFrame([dados])
-    df_atualizado = pd.concat([df, novo_df], ignore_index=True)
-    conn.update(worksheet="lancamentos", data=df_atualizado)
+    try:
+        df = conn.read(worksheet="lancamentos", ttl=0)
+        novo_df = pd.DataFrame([dados])
+        df_atualizado = pd.concat([df, novo_df], ignore_index=True)
+        conn.update(worksheet="lancamentos", data=df_atualizado)
+    except:
+        # Se falhar (tabela vazia), cria a primeira linha
+        novo_df = pd.DataFrame([dados])
+        conn.update(worksheet="lancamentos", data=novo_df)
 
 # --- TELA DE LOGIN ---
 def check_password():
@@ -54,7 +68,6 @@ def check_password():
         email = st.text_input("E-mail")
         password = st.text_input("Senha", type="password")
         if st.button("Entrar"):
-            # Verifica credenciais nos segredos do sistema
             user_email = st.secrets["login"]["email"]
             user_pass = st.secrets["login"]["senha"]
             
@@ -74,52 +87,50 @@ if check_password():
     if menu == "Lançar Despesa":
         st.header("📉 Nova Despesa")
         
-        with st.form("form_despesa", clear_on_submit=True):
-            col1, col2 = st.columns(2)
+        # AQUI FOI REMOVIDO O ST.FORM PARA O CHECKBOX FUNCIONAR
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            valor = st.number_input("Valor Total (R$)", min_value=0.01, format="%.2f")
+            data_liq = st.date_input("Data de Liquidação (Pagamento)")
+            competencia = st.date_input("Mês de Competência", value=datetime.today())
+            status = st.selectbox("Status", ["Pago", "A Pagar"])
+        
+        with col2:
+            # Lógica de Fornecedor Dinâmica
+            lista_fornecedores = carregar_fornecedores()
+            usar_novo_fornecedor = st.checkbox("Cadastrar Novo Fornecedor?")
             
-            with col1:
-                valor = st.number_input("Valor Total (R$)", min_value=0.01, format="%.2f")
-                data_liq = st.date_input("Data de Liquidação (Pagamento)")
-                competencia = st.date_input("Mês de Competência", value=datetime.today())
-                status = st.selectbox("Status", ["Pago", "A Pagar"])
+            if usar_novo_fornecedor:
+                fornecedor = st.text_input("Digite o nome do novo fornecedor")
+            else:
+                fornecedor = st.selectbox("Selecione o Fornecedor", [""] + lista_fornecedores)
             
-            with col2:
-                # Lógica de Fornecedor
-                lista_fornecedores = carregar_fornecedores()
-                usar_novo_fornecedor = st.checkbox("Cadastrar Novo Fornecedor?")
-                
-                if usar_novo_fornecedor:
-                    fornecedor = st.text_input("Digite o nome do novo fornecedor")
-                else:
-                    fornecedor = st.selectbox("Selecione o Fornecedor", [""] + lista_fornecedores)
-                
-                categoria = st.selectbox("Classificação", CATEGORIAS)
-                obs = st.text_area("Observação")
+            categoria = st.selectbox("Classificação", CATEGORIAS)
+            obs = st.text_area("Observação")
 
-            submitted = st.form_submit_button("💾 Salvar Despesa")
-            
-            if submitted:
-                if not fornecedor:
-                    st.warning("Preencha o fornecedor.")
-                else:
-                    # Salva fornecedor se for novo
-                    if usar_novo_fornecedor:
-                        salvar_fornecedor(fornecedor)
-                    
-                    # Prepara dados
-                    dados = {
-                        "data_registro": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "tipo": "Despesa",
-                        "valor": valor,
-                        "fornecedor": fornecedor,
-                        "data_liquidacao": data_liq.strftime("%Y-%m-%d"),
-                        "competencia": competencia.strftime("%Y-%m"), # Salva apenas Ano-Mês
-                        "status": status,
-                        "categoria": categoria,
-                        "observacao": obs
-                    }
-                    salvar_lancamento(dados)
-                    st.success("Despesa registrada com sucesso!")
+        if st.button("💾 Salvar Despesa"):
+            if not fornecedor:
+                st.warning("Preencha o fornecedor.")
+            else:
+                if usar_novo_fornecedor:
+                    salvar_fornecedor(fornecedor)
+                
+                dados = {
+                    "data_registro": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "tipo": "Despesa",
+                    "valor": valor,
+                    "fornecedor": fornecedor,
+                    "data_liquidacao": data_liq.strftime("%Y-%m-%d"),
+                    "competencia": competencia.strftime("%Y-%m"),
+                    "status": status,
+                    "categoria": categoria,
+                    "observacao": obs
+                }
+                salvar_lancamento(dados)
+                st.success("Despesa registrada com sucesso!")
+                # Pequena pausa para garantir que salvou antes de continuar
+                st.cache_data.clear()
 
     # --- ABA: LANÇAR RECEITA ---
     elif menu == "Lançar Receita":
@@ -135,7 +146,7 @@ if check_password():
                     "data_registro": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "tipo": "Receita",
                     "valor": valor,
-                    "fornecedor": "Cliente Final", # Padrão para receitas
+                    "fornecedor": "Cliente Final",
                     "data_liquidacao": data_liq.strftime("%Y-%m-%d"),
                     "competencia": competencia.strftime("%Y-%m"),
                     "status": "Recebido",
@@ -144,6 +155,7 @@ if check_password():
                 }
                 salvar_lancamento(dados)
                 st.success("Receita registrada!")
+                st.cache_data.clear()
 
     # --- ABA: RELATÓRIOS ---
     elif menu == "Relatórios":
@@ -155,16 +167,21 @@ if check_password():
         df = carregar_dados()
         
         if not df.empty:
-            # Garantir tipos de dados corretos
             df['valor'] = pd.to_numeric(df['valor'])
             df['data_liquidacao'] = pd.to_datetime(df['data_liquidacao'])
             
-            # Filtros laterais
             st.sidebar.markdown("---")
             st.sidebar.subheader("Filtros")
             
-            filtro_comp = st.sidebar.multiselect("Filtrar Competência", df['competencia'].unique())
-            filtro_cat = st.sidebar.multiselect("Filtrar Categoria", df['categoria'].unique())
+            # Corrige erro caso a coluna não exista ainda
+            colunas_validas = df.columns.tolist()
+            filtro_comp = None
+            if 'competencia' in colunas_validas:
+                filtro_comp = st.sidebar.multiselect("Filtrar Competência", df['competencia'].unique())
+            
+            filtro_cat = None
+            if 'categoria' in colunas_validas:
+                filtro_cat = st.sidebar.multiselect("Filtrar Categoria", df['categoria'].unique())
             
             df_view = df.copy()
             if filtro_comp:
@@ -172,7 +189,6 @@ if check_password():
             if filtro_cat:
                 df_view = df_view[df_view['categoria'].isin(filtro_cat)]
 
-            # Cards Resumo
             total_rec = df_view[df_view['tipo'] == 'Receita']['valor'].sum()
             total_desp = df_view[df_view['tipo'] == 'Despesa']['valor'].sum()
             saldo = total_rec - total_desp
@@ -182,7 +198,6 @@ if check_password():
             c2.metric("Despesas", f"R$ {total_desp:,.2f}", delta_color="inverse")
             c3.metric("Resultado", f"R$ {saldo:,.2f}")
 
-            # Gráficos
             st.subheader("Despesas por Categoria")
             df_despesas = df_view[df_view['tipo'] == 'Despesa']
             if not df_despesas.empty:
