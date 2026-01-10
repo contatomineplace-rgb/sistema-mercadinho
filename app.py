@@ -1,7 +1,8 @@
 import streamlit as st
 import pandas as pd
 import time
-from datetime import datetime
+import plotly.express as px  # Nova biblioteca gráfica (opcional, mas usarei o nativo se preferir, aqui mantive nativo para simplicidade)
+from datetime import datetime, date
 from streamlit_gsheets import GSheetsConnection
 
 # --- CONFIGURAÇÕES INICIAIS ---
@@ -13,7 +14,7 @@ CATEGORIAS = [
     "Salário", "13° Salário", "Férias", "Simples Nacional", "INSS", "FGTS",
     "Internet", "Celular", "Locação", "Tarifa Bancária",
     "Integralização de Capital em Banco", "Cesta de Relacionamento de Banco",
-    "Cartão de Crédito", "Empréstimo", "Consórcio", "Sistemas", "Outros"
+    "Cartão de Crédito", "Empréstimo", "Consórcio", "Sistemas", "Outros", "Vendas"
 ]
 
 # Dicionário de Meses
@@ -152,43 +153,33 @@ if check_password():
     # --- ABA: LANÇAR DESPESA ---
     if menu == "Lançar Despesa":
         st.header("📉 Gestão de Despesas")
-        
         tab_individual, tab_lote, tab_excluir = st.tabs(["📝 Individual", "📚 Despesa em Lote", "🗑️ Excluir Despesa"])
 
         # === 1. LANÇAMENTO INDIVIDUAL ===
         with tab_individual:
-            # --- LIMPEZA: Define como None/Vazio ---
             if "limpar_despesa_agora" in st.session_state:
-                st.session_state["val_desp"] = "" # Vazio
+                st.session_state["val_desp"] = ""
                 st.session_state["obs_desp"] = ""
-                st.session_state["sel_forn"] = None # None
+                st.session_state["sel_forn"] = None
                 st.session_state["txt_novo_forn"] = ""
                 st.session_state["check_novo_forn"] = False
                 
-                # Reseta data apenas se não for repetir
                 if st.session_state.get("check_repetir_data", False) and "memoria_data_liq" in st.session_state:
                     st.session_state["data_liq_desp"] = st.session_state["memoria_data_liq"]
                 else:
-                    st.session_state["data_liq_desp"] = None # Data Vazia
+                    st.session_state["data_liq_desp"] = None
 
-                # Reseta competência apenas se não for repetir
                 if not st.session_state.get("check_repetir_comp", False):
-                    # Removemos as chaves para que o widget reinicie com index=None
                     if "sel_mes_comp" in st.session_state: del st.session_state["sel_mes_comp"]
                     if "sel_ano_comp" in st.session_state: del st.session_state["sel_ano_comp"]
                 
-                # Reseta outros selects
                 if "status_desp" in st.session_state: del st.session_state["status_desp"]
                 if "cat_desp" in st.session_state: del st.session_state["cat_desp"]
-
                 del st.session_state["limpar_despesa_agora"]
 
-            # --- PADRÕES INICIAIS (Começa tudo Vazio/None, exceto se tiver memória) ---
-            idx_mes = None
-            idx_ano = None
+            idx_mes, idx_ano = None, None
             lista_anos = gerar_lista_anos()
 
-            # Memória Competência
             usar_anterior_comp = st.session_state.get("check_repetir_comp", False)
             if usar_anterior_comp and "memoria_mes" in st.session_state:
                 st.session_state["sel_mes_comp"] = st.session_state["memoria_mes"]
@@ -202,48 +193,26 @@ if check_password():
 
             col1, col2 = st.columns(2)
             with col1:
-                # CAMPO VALOR (Inicia vazio)
-                valor_str = st.text_input(
-                    "Valor Total (R$)", 
-                    value="",  # Inicia vazio
-                    key="val_desp", 
-                    help="Digite o valor (ex: 150,00).",
-                    on_change=formatar_input_br,
-                    args=("val_desp",)
-                )
-
-                # CAMPO DATA (Inicia vazio = None)
+                valor_str = st.text_input("Valor Total (R$)", value="", key="val_desp", help="Digite o valor (ex: 150,00).", on_change=formatar_input_br, args=("val_desp",))
                 data_liq = st.date_input("Data de Liquidação (Pagamento)", value=None, format="DD/MM/YYYY", key="data_liq_desp")
-                
                 st.checkbox("Mesma data de liquidação da despesa anterior", key="check_repetir_data", disabled="memoria_data_liq" not in st.session_state, on_change=atualizar_data_liq)
                 st.markdown("---") 
-                
                 c_mes, c_ano = st.columns(2)
-                with c_mes: 
-                    # index=None inicia com "Selecione..."
-                    mes_selecionado = st.selectbox("Mês de Competência", list(MESES_PT.values()), index=idx_mes, placeholder="Selecione o Mês", key="sel_mes_comp")
-                with c_ano: 
-                    ano_selecionado = st.selectbox("Ano de Competência", lista_anos, index=idx_ano, placeholder="Selecione o Ano", key="sel_ano_comp")
-                
+                with c_mes: mes_selecionado = st.selectbox("Mês de Competência", list(MESES_PT.values()), index=idx_mes, placeholder="Selecione o Mês", key="sel_mes_comp")
+                with c_ano: ano_selecionado = st.selectbox("Ano de Competência", lista_anos, index=idx_ano, placeholder="Selecione o Ano", key="sel_ano_comp")
                 st.checkbox("Mesmo ano e mês de competência da despesa salva anteriormente?", key="check_repetir_comp", disabled="memoria_mes" not in st.session_state) 
-                
                 status = st.selectbox("Status", ["Pago", "A Pagar"], index=None, placeholder="Selecione o Status", key="status_desp")
             
             with col2:
                 lista_fornecedores = carregar_lista_nomes_fornecedores()
                 usar_novo_fornecedor = st.checkbox("Cadastrar Novo Fornecedor?", key="check_novo_forn")
-                
-                if usar_novo_fornecedor: 
-                    fornecedor = st.text_input("Digite o nome do novo fornecedor", key="txt_novo_forn")
-                else: 
-                    fornecedor = st.selectbox("Selecione o Fornecedor", [""] + lista_fornecedores, index=None, placeholder="Selecione o Fornecedor", key="sel_forn")
-                
+                if usar_novo_fornecedor: fornecedor = st.text_input("Digite o nome do novo fornecedor", key="txt_novo_forn")
+                else: fornecedor = st.selectbox("Selecione o Fornecedor", [""] + lista_fornecedores, index=None, placeholder="Selecione o Fornecedor", key="sel_forn")
                 categoria = st.selectbox("Classificação", CATEGORIAS, index=None, placeholder="Selecione a Categoria", key="cat_desp")
                 obs = st.text_area("Observação", key="obs_desp")
 
             st.markdown("---")
             if st.button("💾 Salvar Despesa", type="primary", use_container_width=True):
-                # VALIDAÇÃO: Impede salvar se tiver campos vazios
                 erro_campos = []
                 if not valor_str: erro_campos.append("Valor Total")
                 if not data_liq: erro_campos.append("Data de Liquidação")
@@ -258,10 +227,8 @@ if check_password():
                 else:
                     valor_float = converter_moeda_br_para_float(valor_str)
                     if usar_novo_fornecedor: salvar_fornecedor_rapido(fornecedor)
-                    
                     mes_num = MESES_PT_INV[mes_selecionado]
                     competencia_formatada = f"{ano_selecionado}-{mes_num:02d}"
-
                     dados = {
                         "data_registro": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "tipo": "Despesa",
@@ -286,20 +253,11 @@ if check_password():
         # === 2. LANÇAMENTO EM LOTE ===
         with tab_lote:
             st.info("💡 **Dica:** Copie e cole do Excel. O valor será formatado automaticamente na tabela.")
-            
             lista_anos = gerar_lista_anos()
-            
             linhas_iniciais = [{
-                "valor": None,
-                "data_liquidacao": None,
-                "mes_competencia": None,
-                "ano_competencia": None,
-                "fornecedor": "",
-                "categoria": None,
-                "observacao": "",
-                "status": None
+                "valor": None, "data_liquidacao": None, "mes_competencia": None, "ano_competencia": None,
+                "fornecedor": "", "categoria": None, "observacao": "", "status": None
             } for _ in range(10)]
-            
             df_template = pd.DataFrame(linhas_iniciais)
 
             lote_editado = st.data_editor(
@@ -325,27 +283,20 @@ if check_password():
                 else:
                     df_forn_atual = carregar_fornecedores_df()
                     nomes_forn_existentes = set(df_forn_atual['nome'].str.lower().values)
-                    
                     lista_dados_finais = []
                     erro_encontrado = False
-                    
                     for index, row in lote_editado.iterrows():
-                        if not row['fornecedor'] and pd.isna(row['valor']):
-                            continue
-                            
+                        if not row['fornecedor'] and pd.isna(row['valor']): continue
                         if not row['fornecedor'] or pd.isna(row['valor']) or pd.isna(row['data_liquidacao']) or not row['mes_competencia'] or not row['ano_competencia']:
                             st.warning(f"Linha {index + 1} incompleta. Verifique Valor, Data, Competência e Fornecedor.")
                             erro_encontrado = True
                             continue
-
                         nome_forn = str(row['fornecedor']).strip()
                         if nome_forn.lower() not in nomes_forn_existentes:
                             salvar_fornecedor_rapido(nome_forn)
                             nomes_forn_existentes.add(nome_forn.lower()) 
-
                         mes_num = MESES_PT_INV[row['mes_competencia']]
                         comp_fmt = f"{row['ano_competencia']}-{mes_num:02d}"
-
                         dados_linha = {
                             "data_registro": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             "tipo": "Despesa",
@@ -358,10 +309,8 @@ if check_password():
                             "observacao": row['observacao']
                         }
                         lista_dados_finais.append(dados_linha)
-
                     if lista_dados_finais and not erro_encontrado:
-                        df_para_salvar = pd.DataFrame(lista_dados_finais)
-                        salvar_lote_lancamentos(df_para_salvar)
+                        salvar_lote_lancamentos(pd.DataFrame(lista_dados_finais))
                         st.success(f"{len(lista_dados_finais)} despesas salvas com sucesso!")
                         time.sleep(2)
                         st.cache_data.clear()
@@ -373,11 +322,9 @@ if check_password():
         with tab_excluir:
             st.subheader("🔍 Localizar e Excluir")
             df_dados = carregar_dados()
-            
             if not df_dados.empty:
                 df_dados['valor'] = pd.to_numeric(df_dados['valor'])
                 df_dados['data_liquidacao'] = pd.to_datetime(df_dados['data_liquidacao'])
-                
                 col_f1, col_f2, col_f3 = st.columns(3)
                 with col_f1:
                     anos_disponiveis = sorted(df_dados['competencia'].str[:4].unique())
@@ -386,9 +333,12 @@ if check_password():
                     meses_disponiveis = sorted(df_dados['competencia'].str[5:].unique())
                     filtro_mes = st.multiselect("Filtrar por Mês (Numérico)", meses_disponiveis)
                 with col_f3:
-                    valor_min = float(df_dados['valor'].min())
-                    valor_max = float(df_dados['valor'].max())
-                    filtro_valor = st.slider("Faixa de Valor", valor_min, valor_max, (valor_min, valor_max))
+                    if not df_dados['valor'].empty:
+                        valor_min = float(df_dados['valor'].min())
+                        valor_max = float(df_dados['valor'].max())
+                        if valor_min == valor_max: valor_max += 1.0
+                        filtro_valor = st.slider("Faixa de Valor", valor_min, valor_max, (valor_min, valor_max))
+                    else: filtro_valor = (0.0, 0.0)
 
                 df_filtrado = df_dados.copy()
                 if filtro_ano: df_filtrado = df_filtrado[df_filtrado['competencia'].str[:4].isin(filtro_ano)]
@@ -397,11 +347,9 @@ if check_password():
                 df_filtrado = df_filtrado[df_filtrado['tipo'] == 'Despesa']
 
                 st.markdown(f"**Encontrados:** {len(df_filtrado)} registros.")
-
                 if not df_filtrado.empty:
                     df_filtrado_view = df_filtrado.copy()
                     df_filtrado_view.insert(0, "Excluir?", False)
-
                     editor_exclusao = st.data_editor(
                         df_filtrado_view,
                         column_config={
@@ -413,9 +361,7 @@ if check_password():
                         hide_index=True,
                         use_container_width=True
                     )
-
                     linhas_marcadas = editor_exclusao[editor_exclusao["Excluir?"] == True]
-
                     if not linhas_marcadas.empty:
                         st.error(f"Você selecionou {len(linhas_marcadas)} itens para exclusão.")
                         if st.button("🗑️ CONFIRMAR EXCLUSÃO"):
@@ -425,10 +371,8 @@ if check_password():
                             time.sleep(2)
                             st.cache_data.clear()
                             st.rerun()
-                else:
-                    st.info("Nenhuma despesa encontrada com esses filtros.")
-            else:
-                st.info("Não há dados cadastrados.")
+                else: st.info("Nenhuma despesa encontrada.")
+            else: st.info("Não há dados cadastrados.")
 
     # --- ABA: LANÇAR RECEITA ---
     elif menu == "Lançar Receita":
@@ -479,7 +423,7 @@ if check_password():
                     st.cache_data.clear()
                     st.rerun()
 
-    # --- ABA: RELATÓRIOS ---
+    # --- ABA: RELATÓRIOS (ATUALIZADA) ---
     elif menu == "Relatórios":
         st.header("📊 Relatórios Gerenciais")
         if st.button("🔄 Atualizar Dados"):
@@ -489,30 +433,51 @@ if check_password():
         df = carregar_dados()
         
         if not df.empty:
+            # Pré-processamento
             df['valor'] = pd.to_numeric(df['valor'])
             df['data_liquidacao'] = pd.to_datetime(df['data_liquidacao'])
-            
-            st.sidebar.markdown("---")
-            st.sidebar.subheader("Filtros")
-            
-            colunas_validas = df.columns.tolist()
-            filtro_comp = None
-            if 'competencia' in colunas_validas:
-                comps_unicas = sorted(df['competencia'].unique())
-                filtro_comp = st.sidebar.multiselect("Filtrar Competência (Ano-Mês)", comps_unicas)
-            
-            filtro_cat = None
-            if 'categoria' in colunas_validas:
-                filtro_cat = st.sidebar.multiselect("Filtrar Categoria", df['categoria'].unique())
-            
-            df_view = df.copy()
-            if filtro_comp:
-                df_view = df_view[df_view['competencia'].isin(filtro_comp)]
-            if filtro_cat:
-                df_view = df_view[df_view['categoria'].isin(filtro_cat)]
+            df['ano_comp'] = df['competencia'].str[:4]
+            df['mes_comp_num'] = df['competencia'].str[5:].astype(int)
+            df['mes_comp_nome'] = df['mes_comp_num'].map(MESES_PT)
 
-            total_rec = df_view[df_view['tipo'] == 'Receita']['valor'].sum()
-            total_desp = df_view[df_view['tipo'] == 'Despesa']['valor'].sum()
+            # --- FILTROS LATERAIS ---
+            st.sidebar.markdown("### Filtros do Relatório")
+            
+            # Filtro Tipo
+            filtro_tipo = st.sidebar.multiselect("Tipo", options=["Receita", "Despesa"], default=["Receita", "Despesa"])
+            
+            # Filtro Ano
+            anos_disp = sorted(df['ano_comp'].unique())
+            filtro_ano = st.sidebar.multiselect("Ano de Competência", options=anos_disp, default=anos_disp)
+            
+            # Filtro Mês
+            meses_disp_nome = [MESES_PT[m] for m in sorted(df['mes_comp_num'].unique())]
+            filtro_mes = st.sidebar.multiselect("Mês de Competência", options=meses_disp_nome, default=meses_disp_nome)
+            
+            # Filtro Período (Datas)
+            min_date = df['data_liquidacao'].min().date()
+            max_date = df['data_liquidacao'].max().date()
+            periodo = st.sidebar.date_input("Período (Data Liquidação)", value=(min_date, max_date), min_value=min_date, max_value=max_date)
+
+            # --- APLICAÇÃO DOS FILTROS ---
+            df_filtered = df.copy()
+            
+            if filtro_tipo:
+                df_filtered = df_filtered[df_filtered['tipo'].isin(filtro_tipo)]
+            if filtro_ano:
+                df_filtered = df_filtered[df_filtered['ano_comp'].isin(filtro_ano)]
+            if filtro_mes:
+                df_filtered = df_filtered[df_filtered['mes_comp_nome'].isin(filtro_mes)]
+            
+            if isinstance(periodo, tuple) and len(periodo) == 2:
+                df_filtered = df_filtered[
+                    (df_filtered['data_liquidacao'].dt.date >= periodo[0]) & 
+                    (df_filtered['data_liquidacao'].dt.date <= periodo[1])
+                ]
+
+            # --- MÉTRICAS (Cards) ---
+            total_rec = df_filtered[df_filtered['tipo'] == 'Receita']['valor'].sum()
+            total_desp = df_filtered[df_filtered['tipo'] == 'Despesa']['valor'].sum()
             saldo = total_rec - total_desp
             
             c1, c2, c3 = st.columns(3)
@@ -520,14 +485,29 @@ if check_password():
             c2.metric("Despesas", f"R$ {total_desp:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), delta_color="inverse")
             c3.metric("Resultado", f"R$ {saldo:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
 
-            st.subheader("Despesas por Categoria")
-            df_despesas = df_view[df_view['tipo'] == 'Despesa']
-            if not df_despesas.empty:
-                st.bar_chart(df_despesas.groupby("categoria")["valor"].sum())
+            st.markdown("---")
 
+            # --- GRÁFICOS ---
+            if not df_filtered.empty:
+                col_g1, col_g2 = st.columns(2)
+                
+                with col_g1:
+                    st.subheader("Evolução Mensal (Receita x Despesa)")
+                    # Agrupa por competência e tipo
+                    df_chart1 = df_filtered.groupby(['competencia', 'tipo'])['valor'].sum().unstack().fillna(0)
+                    st.bar_chart(df_chart1, use_container_width=True)
+
+                with col_g2:
+                    st.subheader("Distribuição por Categoria")
+                    df_cat = df_filtered.groupby("categoria")["valor"].sum().sort_values(ascending=False)
+                    st.bar_chart(df_cat, use_container_width=True)
+            else:
+                st.info("Sem dados para exibir nos gráficos com os filtros atuais.")
+
+            # --- TABELA DETALHADA ---
             st.subheader("Extrato Detalhado")
             st.dataframe(
-                df_view.sort_values("data_liquidacao", ascending=False), 
+                df_filtered.sort_values("data_liquidacao", ascending=False), 
                 use_container_width=True,
                 column_config={
                     "data_liquidacao": st.column_config.DateColumn("Data Liq.", format="DD/MM/YYYY"),
