@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import time  # <--- IMPORTANTE: Biblioteca para controlar o tempo
 from datetime import datetime
 from streamlit_gsheets import GSheetsConnection
 
@@ -34,13 +35,10 @@ def carregar_dados():
 def carregar_fornecedores_df():
     try:
         df = conn.read(worksheet="fornecedores", ttl=0)
-        
-        # Garante colunas necessárias
         colunas_necessarias = ['nome', 'cnpj', 'telefone', 'login_app', 'senha_app']
         for col in colunas_necessarias:
             if col not in df.columns:
                 df[col] = pd.Series(dtype='str')
-                
         df = df.fillna("")
         df = df.astype(str)
         return df
@@ -116,7 +114,6 @@ if check_password():
     if menu == "Lançar Despesa":
         st.header("📉 Nova Despesa")
         
-        # --- LÓGICA DE PREENCHIMENTO ---
         mes_atual_nome = MESES_PT[datetime.now().month]
         ano_atual_str = str(datetime.now().year)
         
@@ -124,7 +121,7 @@ if check_password():
         lista_anos = gerar_lista_anos()
         idx_ano = lista_anos.index(ano_atual_str) if ano_atual_str in lista_anos else 0
 
-        # Verifica se checkbox de repetir está marcado
+        # Verifica memória
         usar_anterior = st.session_state.get("check_repetir_comp", False)
         if usar_anterior and "memoria_mes" in st.session_state:
             try:
@@ -135,21 +132,18 @@ if check_password():
             except:
                 pass 
 
-        # --- CAMPOS VISUAIS ---
         col1, col2 = st.columns(2)
         
         with col1:
             valor = st.number_input("Valor Total (R$)", min_value=0.01, format="%.2f", key="val_desp")
             data_liq = st.date_input("Data de Liquidação (Pagamento)", format="DD/MM/YYYY", key="data_liq_desp")
             
-            # Competência
             c_mes, c_ano = st.columns(2)
             with c_mes:
                 mes_selecionado = st.selectbox("Mês de Competência", list(MESES_PT.values()), index=idx_mes, key="sel_mes_comp")
             with c_ano:
                 ano_selecionado = st.selectbox("Ano de Competência", lista_anos, index=idx_ano, key="sel_ano_comp")
             
-            # Checkbox de Memória
             st.checkbox("Mesmo ano e mês de competência da despesa salva anteriormente?", 
                         key="check_repetir_comp",
                         disabled="memoria_mes" not in st.session_state) 
@@ -168,7 +162,6 @@ if check_password():
             categoria = st.selectbox("Classificação", CATEGORIAS, key="cat_desp")
             obs = st.text_area("Observação", key="obs_desp")
 
-        # --- BOTÃO DE SALVAR ---
         st.markdown("---")
         if st.button("💾 Salvar Despesa", type="primary", use_container_width=True):
             if not fornecedor:
@@ -192,14 +185,15 @@ if check_password():
                     "observacao": obs
                 }
                 salvar_lancamento(dados)
-                st.success("Despesa registrada com sucesso!")
                 
-                # Guarda memória para o próximo (se o checkbox estiver ativado)
+                # --- MUDANÇA AQUI: Mensagem + Espera de 3 segundos ---
+                st.success("Despesa registrada com sucesso! A tela será limpa em 3 segundos...")
+                time.sleep(3) 
+                # -----------------------------------------------------
+
                 st.session_state["memoria_mes"] = mes_selecionado
                 st.session_state["memoria_ano"] = ano_selecionado
 
-                # --- ROTINA DE LIMPEZA ---
-                # Remove os valores da sessão para que, ao recarregar, voltem ao padrão
                 chaves_limpar = [
                     "val_desp", "data_liq_desp", "status_desp", 
                     "sel_mes_comp", "sel_ano_comp", 
@@ -210,7 +204,6 @@ if check_password():
                     if chave in st.session_state:
                         del st.session_state[chave]
                 
-                # Limpa o cache de dados (para ler a planilha atualizada) e recarrega a página
                 st.cache_data.clear()
                 st.rerun()
 
@@ -251,9 +244,11 @@ if check_password():
                     "observacao": obs
                 }
                 salvar_lancamento(dados)
-                st.success("Receita registrada!")
                 
-                # Limpeza Receita
+                # Apliquei a mesma espera na Receita para padronizar
+                st.success("Receita registrada! Limpando em 3 segundos...")
+                time.sleep(3)
+
                 chaves_rec = ["val_rec", "data_rec", "mes_rec", "ano_rec", "obs_rec"]
                 for chave in chaves_rec:
                     if chave in st.session_state:
@@ -312,41 +307,4 @@ if check_password():
             st.dataframe(
                 df_view.sort_values("data_liquidacao", ascending=False), 
                 use_container_width=True,
-                column_config={
-                    "data_liquidacao": st.column_config.DateColumn("Data Liq.", format="DD/MM/YYYY")
-                }
-            )
-        else:
-            st.info("Nenhum dado lançado ainda.")
-
-    # --- ABA: CONFIGURAÇÕES ---
-    elif menu == "Configurações":
-        st.header("⚙️ Configurações")
-        
-        tab_fornecedores, tab_outros = st.tabs(["🏭 Fornecedores", "Outros"])
-        
-        with tab_fornecedores:
-            st.subheader("Gerenciar Fornecedores")
-            st.info("Edite os nomes e dados de acesso. Clique em 'Salvar Alterações' para confirmar.")
-            
-            df_fornecedores = carregar_fornecedores_df()
-            
-            df_editado = st.data_editor(
-                df_fornecedores,
-                num_rows="dynamic", 
-                column_config={
-                    "nome": st.column_config.TextColumn("Nome do Fornecedor", required=True),
-                    "cnpj": st.column_config.TextColumn("CNPJ"),
-                    "telefone": st.column_config.TextColumn("Telefone"),
-                    "login_app": st.column_config.TextColumn("Login App"),
-                    "senha_app": st.column_config.TextColumn("Senha App")
-                },
-                use_container_width=True,
-                hide_index=True
-            )
-            
-            if st.button("💾 Salvar Alterações nos Fornecedores"):
-                salvar_tabela_fornecedores(df_editado)
-                st.success("Lista de fornecedores atualizada com sucesso!")
-                st.cache_data.clear()
-                st.rerun()
+                column_config
