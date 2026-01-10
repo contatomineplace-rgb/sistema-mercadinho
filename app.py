@@ -114,7 +114,25 @@ if check_password():
     if menu == "Lançar Despesa":
         st.header("📉 Nova Despesa")
         
-        # Define padrões (Mês/Ano Atual)
+        # --- LÓGICA DE LIMPEZA (Executa ANTES de desenhar os campos) ---
+        if "limpar_despesa_agora" in st.session_state:
+            st.session_state["val_desp"] = 0.00
+            st.session_state["obs_desp"] = ""
+            st.session_state["sel_forn"] = ""  # Limpa o fornecedor selecionado
+            st.session_state["txt_novo_forn"] = ""
+            st.session_state["check_novo_forn"] = False
+            st.session_state["data_liq_desp"] = datetime.now()
+            
+            # Só reseta data se a memória estiver desligada
+            if not st.session_state.get("check_repetir_comp", False):
+                # Removemos as chaves para que recarreguem com o padrão (data atual)
+                if "sel_mes_comp" in st.session_state: del st.session_state["sel_mes_comp"]
+                if "sel_ano_comp" in st.session_state: del st.session_state["sel_ano_comp"]
+            
+            # Remove a bandeira para não limpar de novo sem querer
+            del st.session_state["limpar_despesa_agora"]
+
+        # --- DEFINIÇÃO DE PADRÕES ---
         mes_atual_nome = MESES_PT[datetime.now().month]
         ano_atual_str = str(datetime.now().year)
         
@@ -122,7 +140,7 @@ if check_password():
         lista_anos = gerar_lista_anos()
         idx_ano = lista_anos.index(ano_atual_str) if ano_atual_str in lista_anos else 0
 
-        # Lógica de Memória
+        # Aplica memória de competência se existir
         usar_anterior = st.session_state.get("check_repetir_comp", False)
         if usar_anterior and "memoria_mes" in st.session_state:
             try:
@@ -133,10 +151,11 @@ if check_password():
             except:
                 pass 
 
+        # --- CAMPOS VISUAIS ---
         col1, col2 = st.columns(2)
         
         with col1:
-            valor = st.number_input("Valor Total (R$)", min_value=0.01, format="%.2f", key="val_desp")
+            valor = st.number_input("Valor Total (R$)", min_value=0.00, format="%.2f", key="val_desp")
             data_liq = st.date_input("Data de Liquidação (Pagamento)", format="DD/MM/YYYY", key="data_liq_desp")
             
             c_mes, c_ano = st.columns(2)
@@ -164,7 +183,6 @@ if check_password():
             obs = st.text_area("Observação", key="obs_desp")
 
         st.markdown("---")
-        # Botão de Salvar
         if st.button("💾 Salvar Despesa", type="primary", use_container_width=True):
             if not fornecedor:
                 st.warning("Preencha o fornecedor.")
@@ -188,24 +206,15 @@ if check_password():
                 }
                 salvar_lancamento(dados)
                 
-                # Mensagem de Sucesso e Espera
                 st.success("Despesa registrada com sucesso! A tela será limpa em 3 segundos...")
                 time.sleep(3) 
 
-                # Salva na memória o que for preciso
+                # Salva memória de competência
                 st.session_state["memoria_mes"] = mes_selecionado
                 st.session_state["memoria_ano"] = ano_selecionado
 
-                # --- ROTINA DE LIMPEZA CORRETA ---
-                chaves_limpar = [
-                    "val_desp", "data_liq_desp", "status_desp", 
-                    "sel_mes_comp", "sel_ano_comp", 
-                    "check_novo_forn", "txt_novo_forn", "sel_forn", 
-                    "cat_desp", "obs_desp"
-                ]
-                for chave in chaves_limpar:
-                    if chave in st.session_state:
-                        del st.session_state[chave]
+                # ATIVA A BANDEIRA PARA LIMPAR NA PRÓXIMA RECARGA
+                st.session_state["limpar_despesa_agora"] = True
                 
                 st.cache_data.clear()
                 st.rerun()
@@ -214,12 +223,22 @@ if check_password():
     elif menu == "Lançar Receita":
         st.header("📈 Nova Receita")
         
+        # --- LÓGICA DE LIMPEZA RECEITA ---
+        if "limpar_receita_agora" in st.session_state:
+            st.session_state["val_rec"] = 0.00
+            st.session_state["obs_rec"] = ""
+            st.session_state["data_rec"] = datetime.now()
+            # Limpa seleções de data
+            if "mes_rec" in st.session_state: del st.session_state["mes_rec"]
+            if "ano_rec" in st.session_state: del st.session_state["ano_rec"]
+            del st.session_state["limpar_receita_agora"]
+
         mes_atual_nome = MESES_PT[datetime.now().month]
         idx_mes = list(MESES_PT.values()).index(mes_atual_nome)
         lista_anos = gerar_lista_anos()
 
         with st.container():
-            valor = st.number_input("Valor Receita (R$)", min_value=0.01, format="%.2f", key="val_rec")
+            valor = st.number_input("Valor Receita (R$)", min_value=0.00, format="%.2f", key="val_rec")
             data_liq = st.date_input("Data Recebimento", format="DD/MM/YYYY", key="data_rec")
             
             c_mes, c_ano = st.columns(2)
@@ -251,11 +270,8 @@ if check_password():
                 st.success("Receita registrada! Limpando em 3 segundos...")
                 time.sleep(3)
 
-                # Limpeza Receita
-                chaves_rec = ["val_rec", "data_rec", "mes_rec", "ano_rec", "obs_rec"]
-                for chave in chaves_rec:
-                    if chave in st.session_state:
-                        del st.session_state[chave]
+                # ATIVA A BANDEIRA DE LIMPEZA
+                st.session_state["limpar_receita_agora"] = True
                 
                 st.cache_data.clear()
                 st.rerun()
