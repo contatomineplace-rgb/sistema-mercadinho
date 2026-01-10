@@ -235,20 +235,20 @@ if check_password():
 
         # === 2. LANÇAMENTO EM LOTE ===
         with tab_lote:
-            st.info("💡 **Dica:** Esta tabela funciona como o Excel. Você pode selecionar uma linha, apertar **Ctrl+C**, selecionar as linhas de baixo e apertar **Ctrl+V** para colar.")
+            st.info("💡 Use **Ctrl+C** e **Ctrl+V** para copiar e colar linhas.")
             
             lista_anos = gerar_lista_anos()
             
-            # CRIA 10 LINHAS VAZIAS PARA FACILITAR A COLAGEM
+            # --- MUDANÇA AQUI: Inicia com None (Vazio) ---
             linhas_iniciais = [{
-                "valor": 0.0,
-                "data_liquidacao": datetime.today(),
-                "mes_competencia": MESES_PT[datetime.today().month],
-                "ano_competencia": str(datetime.today().year),
+                "valor": None,
+                "data_liquidacao": None,
+                "mes_competencia": None,
+                "ano_competencia": None,
                 "fornecedor": "",
-                "categoria": "Mercadoria",
+                "categoria": None,
                 "observacao": "",
-                "status": "Pago"
+                "status": None
             } for _ in range(10)]
             
             df_template = pd.DataFrame(linhas_iniciais)
@@ -278,10 +278,17 @@ if check_password():
                     nomes_forn_existentes = set(df_forn_atual['nome'].str.lower().values)
                     
                     lista_dados_finais = []
+                    erro_encontrado = False
                     
                     for index, row in lote_editado.iterrows():
-                        # Ignora linhas não preenchidas ou com valor zero
-                        if not row['fornecedor'] or row['valor'] == 0:
+                        # Pula linhas totalmente vazias
+                        if not row['fornecedor'] and pd.isna(row['valor']):
+                            continue
+                            
+                        # Verifica se preencheu tudo o que é obrigatório na linha
+                        if not row['fornecedor'] or pd.isna(row['valor']) or pd.isna(row['data_liquidacao']) or not row['mes_competencia'] or not row['ano_competencia']:
+                            st.warning(f"Linha {index + 1} incompleta. Verifique Valor, Data, Competência e Fornecedor.")
+                            erro_encontrado = True
                             continue
 
                         nome_forn = str(row['fornecedor']).strip()
@@ -299,21 +306,21 @@ if check_password():
                             "fornecedor": nome_forn,
                             "data_liquidacao": pd.to_datetime(row['data_liquidacao']).strftime("%Y-%m-%d"),
                             "competencia": comp_fmt,
-                            "status": row['status'],
-                            "categoria": row['categoria'],
+                            "status": row['status'] if row['status'] else "Pago",
+                            "categoria": row['categoria'] if row['categoria'] else "Outros",
                             "observacao": row['observacao']
                         }
                         lista_dados_finais.append(dados_linha)
 
-                    if lista_dados_finais:
+                    if lista_dados_finais and not erro_encontrado:
                         df_para_salvar = pd.DataFrame(lista_dados_finais)
                         salvar_lote_lancamentos(df_para_salvar)
                         st.success(f"{len(lista_dados_finais)} despesas salvas com sucesso!")
                         time.sleep(2)
                         st.cache_data.clear()
                         st.rerun()
-                    else:
-                        st.warning("Nenhuma linha válida para salvar (verifique se preencheu fornecedor e valor).")
+                    elif not lista_dados_finais and not erro_encontrado:
+                        st.warning("Nenhuma linha preenchida para salvar.")
 
         # === 3. EXCLUIR DESPESA ===
         with tab_excluir:
