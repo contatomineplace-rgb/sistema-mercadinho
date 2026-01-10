@@ -28,11 +28,17 @@ def carregar_fornecedores_df():
     # Carrega a tabela completa de fornecedores para edição
     try:
         df = conn.read(worksheet="fornecedores", ttl=0)
-        # Garante que as colunas existem mesmo se a planilha estiver vazia
+        
+        # 1. Garante que as colunas existem
         if 'nome' not in df.columns:
             df['nome'] = pd.Series(dtype='str')
         if 'cnpj' not in df.columns:
             df['cnpj'] = pd.Series(dtype='str')
+            
+        # 2. CORREÇÃO DO ERRO: Converte tudo para texto para evitar conflito de tipos
+        df = df.fillna("")  # Troca vazios por texto vazio
+        df = df.astype(str) # Força tudo a ser texto
+        
         return df
     except:
         return pd.DataFrame(columns=['nome', 'cnpj'])
@@ -55,7 +61,7 @@ def salvar_fornecedor_rapido(novo_nome):
         conn.update(worksheet="fornecedores", data=novo_registro)
 
 def salvar_tabela_fornecedores(df_editado):
-    # Usado na tela de Configurações (salva tudo: edições, CNPJs e exclusões)
+    # Usado na tela de Configurações (salva tudo)
     conn.update(worksheet="fornecedores", data=df_editado)
 
 def salvar_lancamento(dados):
@@ -95,7 +101,6 @@ def check_password():
 # --- INTERFACE PRINCIPAL ---
 if check_password():
     st.sidebar.title("Menu")
-    # Adicionada a opção "Configurações" no menu
     menu = st.sidebar.radio("Navegar", ["Lançar Despesa", "Lançar Receita", "Relatórios", "Configurações"])
 
     # --- ABA: LANÇAR DESPESA ---
@@ -219,11 +224,10 @@ if check_password():
         else:
             st.info("Nenhum dado lançado ainda.")
 
-    # --- ABA: CONFIGURAÇÕES (NOVA) ---
+    # --- ABA: CONFIGURAÇÕES ---
     elif menu == "Configurações":
         st.header("⚙️ Configurações")
         
-        # Submenu interno usando abas
         tab_fornecedores, tab_outros = st.tabs(["🏭 Fornecedores", "Outros"])
         
         with tab_fornecedores:
@@ -233,8 +237,7 @@ if check_password():
             # Carrega tabela
             df_fornecedores = carregar_fornecedores_df()
             
-            # Editor de Dados (Tabela Interativa)
-            # num_rows="dynamic" permite adicionar e excluir linhas
+            # Editor de Dados
             df_editado = st.data_editor(
                 df_fornecedores,
                 num_rows="dynamic", 
