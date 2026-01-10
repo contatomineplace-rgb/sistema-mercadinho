@@ -81,6 +81,23 @@ def gerar_lista_anos():
     ano_atual = datetime.now().year
     return [str(ano) for ano in range(2025, ano_atual + 3)]
 
+def converter_moeda_br_para_float(valor_str):
+    """Converte '4.000,00' para 4000.00"""
+    if not valor_str:
+        return 0.0
+    limpo = valor_str.replace("R$", "").replace(" ", "").replace(".", "")
+    limpo = limpo.replace(",", ".")
+    try:
+        return float(limpo)
+    except ValueError:
+        return 0.0
+
+# --- CALLBACKS (Funções auxiliares de atualização) ---
+def atualizar_data_liq():
+    """Chamado quando clica no checkbox de repetir data"""
+    if st.session_state.get("check_repetir_data") and "memoria_data_liq" in st.session_state:
+        st.session_state["data_liq_desp"] = st.session_state["memoria_data_liq"]
+
 # --- TELA DE LOGIN ---
 def check_password():
     if "password_correct" not in st.session_state:
@@ -114,25 +131,28 @@ if check_password():
     if menu == "Lançar Despesa":
         st.header("📉 Nova Despesa")
         
-        # --- LÓGICA DE LIMPEZA (Executa ANTES de desenhar os campos) ---
+        # --- LÓGICA DE LIMPEZA E PREPARAÇÃO ---
         if "limpar_despesa_agora" in st.session_state:
-            st.session_state["val_desp"] = 0.00
+            st.session_state["val_desp"] = "0,00"
             st.session_state["obs_desp"] = ""
-            st.session_state["sel_forn"] = ""  # Limpa o fornecedor selecionado
+            st.session_state["sel_forn"] = ""
             st.session_state["txt_novo_forn"] = ""
             st.session_state["check_novo_forn"] = False
-            st.session_state["data_liq_desp"] = datetime.now()
             
-            # Só reseta data se a memória estiver desligada
+            # Lógica Data Liquidação: Se repetir estiver ativado, usa memória. Se não, hoje.
+            if st.session_state.get("check_repetir_data", False) and "memoria_data_liq" in st.session_state:
+                st.session_state["data_liq_desp"] = st.session_state["memoria_data_liq"]
+            else:
+                st.session_state["data_liq_desp"] = datetime.now()
+
+            # Lógica Competência
             if not st.session_state.get("check_repetir_comp", False):
-                # Removemos as chaves para que recarreguem com o padrão (data atual)
                 if "sel_mes_comp" in st.session_state: del st.session_state["sel_mes_comp"]
                 if "sel_ano_comp" in st.session_state: del st.session_state["sel_ano_comp"]
             
-            # Remove a bandeira para não limpar de novo sem querer
             del st.session_state["limpar_despesa_agora"]
 
-        # --- DEFINIÇÃO DE PADRÕES ---
+        # --- PADRÕES COMPETÊNCIA ---
         mes_atual_nome = MESES_PT[datetime.now().month]
         ano_atual_str = str(datetime.now().year)
         
@@ -140,9 +160,9 @@ if check_password():
         lista_anos = gerar_lista_anos()
         idx_ano = lista_anos.index(ano_atual_str) if ano_atual_str in lista_anos else 0
 
-        # Aplica memória de competência se existir
-        usar_anterior = st.session_state.get("check_repetir_comp", False)
-        if usar_anterior and "memoria_mes" in st.session_state:
+        # Memória Competência (Recupera se existir)
+        usar_anterior_comp = st.session_state.get("check_repetir_comp", False)
+        if usar_anterior_comp and "memoria_mes" in st.session_state:
             try:
                 if st.session_state["memoria_mes"] in list(MESES_PT.values()):
                     idx_mes = list(MESES_PT.values()).index(st.session_state["memoria_mes"])
@@ -151,12 +171,21 @@ if check_password():
             except:
                 pass 
 
-        # --- CAMPOS VISUAIS ---
         col1, col2 = st.columns(2)
         
         with col1:
-            valor = st.number_input("Valor Total (R$)", min_value=0.00, format="%.2f", key="val_desp")
+            valor_str = st.text_input("Valor Total (R$)", value="0,00", key="val_desp", help="Ex: 4.000,00")
+            
+            # Data de Liquidação
             data_liq = st.date_input("Data de Liquidação (Pagamento)", format="DD/MM/YYYY", key="data_liq_desp")
+            
+            # NOVO CHECKBOX PARA DATA
+            st.checkbox("Mesma data de liquidação da despesa anterior", 
+                        key="check_repetir_data",
+                        disabled="memoria_data_liq" not in st.session_state,
+                        on_change=atualizar_data_liq) # Ao clicar, já atualiza a data
+
+            st.markdown("---") # Espaço visual
             
             c_mes, c_ano = st.columns(2)
             with c_mes:
@@ -187,6 +216,8 @@ if check_password():
             if not fornecedor:
                 st.warning("Preencha o fornecedor.")
             else:
+                valor_float = converter_moeda_br_para_float(valor_str)
+
                 if usar_novo_fornecedor:
                     salvar_fornecedor_rapido(fornecedor)
                 
@@ -196,7 +227,7 @@ if check_password():
                 dados = {
                     "data_registro": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "tipo": "Despesa",
-                    "valor": valor,
+                    "valor": valor_float,
                     "fornecedor": fornecedor,
                     "data_liquidacao": data_liq.strftime("%Y-%m-%d"),
                     "competencia": competencia_formatada,
@@ -209,11 +240,12 @@ if check_password():
                 st.success("Despesa registrada com sucesso! A tela será limpa em 3 segundos...")
                 time.sleep(3) 
 
-                # Salva memória de competência
+                # --- SALVA MEMÓRIAS ---
                 st.session_state["memoria_mes"] = mes_selecionado
                 st.session_state["memoria_ano"] = ano_selecionado
+                st.session_state["memoria_data_liq"] = data_liq  # Salva a data usada
 
-                # ATIVA A BANDEIRA PARA LIMPAR NA PRÓXIMA RECARGA
+                # Ativa bandeira de limpeza
                 st.session_state["limpar_despesa_agora"] = True
                 
                 st.cache_data.clear()
@@ -223,12 +255,10 @@ if check_password():
     elif menu == "Lançar Receita":
         st.header("📈 Nova Receita")
         
-        # --- LÓGICA DE LIMPEZA RECEITA ---
         if "limpar_receita_agora" in st.session_state:
-            st.session_state["val_rec"] = 0.00
+            st.session_state["val_rec"] = "0,00"
             st.session_state["obs_rec"] = ""
             st.session_state["data_rec"] = datetime.now()
-            # Limpa seleções de data
             if "mes_rec" in st.session_state: del st.session_state["mes_rec"]
             if "ano_rec" in st.session_state: del st.session_state["ano_rec"]
             del st.session_state["limpar_receita_agora"]
@@ -238,7 +268,7 @@ if check_password():
         lista_anos = gerar_lista_anos()
 
         with st.container():
-            valor = st.number_input("Valor Receita (R$)", min_value=0.00, format="%.2f", key="val_rec")
+            valor_str = st.text_input("Valor Receita (R$)", value="0,00", key="val_rec", help="Ex: 15.000,00")
             data_liq = st.date_input("Data Recebimento", format="DD/MM/YYYY", key="data_rec")
             
             c_mes, c_ano = st.columns(2)
@@ -251,13 +281,15 @@ if check_password():
             
             st.markdown("---")
             if st.button("💾 Salvar Receita", type="primary"):
+                valor_float = converter_moeda_br_para_float(valor_str)
+                
                 mes_num = MESES_PT_INV[mes_rec]
                 comp_formatada = f"{ano_rec}-{mes_num:02d}"
 
                 dados = {
                     "data_registro": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "tipo": "Receita",
-                    "valor": valor,
+                    "valor": valor_float,
                     "fornecedor": "Cliente Final",
                     "data_liquidacao": data_liq.strftime("%Y-%m-%d"),
                     "competencia": comp_formatada,
@@ -270,7 +302,6 @@ if check_password():
                 st.success("Receita registrada! Limpando em 3 segundos...")
                 time.sleep(3)
 
-                # ATIVA A BANDEIRA DE LIMPEZA
                 st.session_state["limpar_receita_agora"] = True
                 
                 st.cache_data.clear()
@@ -313,9 +344,9 @@ if check_password():
             saldo = total_rec - total_desp
             
             c1, c2, c3 = st.columns(3)
-            c1.metric("Receitas", f"R$ {total_rec:,.2f}")
-            c2.metric("Despesas", f"R$ {total_desp:,.2f}", delta_color="inverse")
-            c3.metric("Resultado", f"R$ {saldo:,.2f}")
+            c1.metric("Receitas", f"R$ {total_rec:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+            c2.metric("Despesas", f"R$ {total_desp:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), delta_color="inverse")
+            c3.metric("Resultado", f"R$ {saldo:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
 
             st.subheader("Despesas por Categoria")
             df_despesas = df_view[df_view['tipo'] == 'Despesa']
@@ -327,7 +358,8 @@ if check_password():
                 df_view.sort_values("data_liquidacao", ascending=False), 
                 use_container_width=True,
                 column_config={
-                    "data_liquidacao": st.column_config.DateColumn("Data Liq.", format="DD/MM/YYYY")
+                    "data_liquidacao": st.column_config.DateColumn("Data Liq.", format="DD/MM/YYYY"),
+                    "valor": st.column_config.NumberColumn("Valor", format="R$ %.2f")
                 }
             )
         else:
