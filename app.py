@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import time
-import plotly.express as px  # Nova biblioteca gráfica (opcional, mas usarei o nativo se preferir, aqui mantive nativo para simplicidade)
 from datetime import datetime, date
 from streamlit_gsheets import GSheetsConnection
 
@@ -423,7 +422,7 @@ if check_password():
                     st.cache_data.clear()
                     st.rerun()
 
-    # --- ABA: RELATÓRIOS (ATUALIZADA) ---
+    # --- ABA: RELATÓRIOS ---
     elif menu == "Relatórios":
         st.header("📊 Relatórios Gerenciais")
         if st.button("🔄 Atualizar Dados"):
@@ -433,49 +432,29 @@ if check_password():
         df = carregar_dados()
         
         if not df.empty:
-            # Pré-processamento
             df['valor'] = pd.to_numeric(df['valor'])
             df['data_liquidacao'] = pd.to_datetime(df['data_liquidacao'])
             df['ano_comp'] = df['competencia'].str[:4]
             df['mes_comp_num'] = df['competencia'].str[5:].astype(int)
             df['mes_comp_nome'] = df['mes_comp_num'].map(MESES_PT)
 
-            # --- FILTROS LATERAIS ---
             st.sidebar.markdown("### Filtros do Relatório")
-            
-            # Filtro Tipo
             filtro_tipo = st.sidebar.multiselect("Tipo", options=["Receita", "Despesa"], default=["Receita", "Despesa"])
-            
-            # Filtro Ano
             anos_disp = sorted(df['ano_comp'].unique())
             filtro_ano = st.sidebar.multiselect("Ano de Competência", options=anos_disp, default=anos_disp)
-            
-            # Filtro Mês
             meses_disp_nome = [MESES_PT[m] for m in sorted(df['mes_comp_num'].unique())]
             filtro_mes = st.sidebar.multiselect("Mês de Competência", options=meses_disp_nome, default=meses_disp_nome)
-            
-            # Filtro Período (Datas)
             min_date = df['data_liquidacao'].min().date()
             max_date = df['data_liquidacao'].max().date()
             periodo = st.sidebar.date_input("Período (Data Liquidação)", value=(min_date, max_date), min_value=min_date, max_value=max_date)
 
-            # --- APLICAÇÃO DOS FILTROS ---
             df_filtered = df.copy()
-            
-            if filtro_tipo:
-                df_filtered = df_filtered[df_filtered['tipo'].isin(filtro_tipo)]
-            if filtro_ano:
-                df_filtered = df_filtered[df_filtered['ano_comp'].isin(filtro_ano)]
-            if filtro_mes:
-                df_filtered = df_filtered[df_filtered['mes_comp_nome'].isin(filtro_mes)]
-            
+            if filtro_tipo: df_filtered = df_filtered[df_filtered['tipo'].isin(filtro_tipo)]
+            if filtro_ano: df_filtered = df_filtered[df_filtered['ano_comp'].isin(filtro_ano)]
+            if filtro_mes: df_filtered = df_filtered[df_filtered['mes_comp_nome'].isin(filtro_mes)]
             if isinstance(periodo, tuple) and len(periodo) == 2:
-                df_filtered = df_filtered[
-                    (df_filtered['data_liquidacao'].dt.date >= periodo[0]) & 
-                    (df_filtered['data_liquidacao'].dt.date <= periodo[1])
-                ]
+                df_filtered = df_filtered[(df_filtered['data_liquidacao'].dt.date >= periodo[0]) & (df_filtered['data_liquidacao'].dt.date <= periodo[1])]
 
-            # --- MÉTRICAS (Cards) ---
             total_rec = df_filtered[df_filtered['tipo'] == 'Receita']['valor'].sum()
             total_desp = df_filtered[df_filtered['tipo'] == 'Despesa']['valor'].sum()
             saldo = total_rec - total_desp
@@ -486,17 +465,12 @@ if check_password():
             c3.metric("Resultado", f"R$ {saldo:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
 
             st.markdown("---")
-
-            # --- GRÁFICOS ---
             if not df_filtered.empty:
                 col_g1, col_g2 = st.columns(2)
-                
                 with col_g1:
                     st.subheader("Evolução Mensal (Receita x Despesa)")
-                    # Agrupa por competência e tipo
                     df_chart1 = df_filtered.groupby(['competencia', 'tipo'])['valor'].sum().unstack().fillna(0)
                     st.bar_chart(df_chart1, use_container_width=True)
-
                 with col_g2:
                     st.subheader("Distribuição por Categoria")
                     df_cat = df_filtered.groupby("categoria")["valor"].sum().sort_values(ascending=False)
@@ -504,7 +478,6 @@ if check_password():
             else:
                 st.info("Sem dados para exibir nos gráficos com os filtros atuais.")
 
-            # --- TABELA DETALHADA ---
             st.subheader("Extrato Detalhado")
             st.dataframe(
                 df_filtered.sort_values("data_liquidacao", ascending=False), 
