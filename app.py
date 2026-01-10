@@ -92,9 +92,8 @@ def converter_moeda_br_para_float(valor_str):
     except ValueError:
         return 0.0
 
-# --- CALLBACKS (Funções auxiliares de atualização) ---
+# --- CALLBACKS ---
 def atualizar_data_liq():
-    """Chamado quando clica no checkbox de repetir data"""
     if st.session_state.get("check_repetir_data") and "memoria_data_liq" in st.session_state:
         st.session_state["data_liq_desp"] = st.session_state["memoria_data_liq"]
 
@@ -131,7 +130,7 @@ if check_password():
     if menu == "Lançar Despesa":
         st.header("📉 Nova Despesa")
         
-        # --- LÓGICA DE LIMPEZA E PREPARAÇÃO ---
+        # --- 1. LÓGICA DE LIMPEZA ---
         if "limpar_despesa_agora" in st.session_state:
             st.session_state["val_desp"] = "0,00"
             st.session_state["obs_desp"] = ""
@@ -139,30 +138,37 @@ if check_password():
             st.session_state["txt_novo_forn"] = ""
             st.session_state["check_novo_forn"] = False
             
-            # Lógica Data Liquidação: Se repetir estiver ativado, usa memória. Se não, hoje.
+            # Data Liquidação
             if st.session_state.get("check_repetir_data", False) and "memoria_data_liq" in st.session_state:
                 st.session_state["data_liq_desp"] = st.session_state["memoria_data_liq"]
             else:
                 st.session_state["data_liq_desp"] = datetime.now()
 
-            # Lógica Competência
+            # Competência: Se NÃO for repetir, limpa as chaves para resetar
             if not st.session_state.get("check_repetir_comp", False):
                 if "sel_mes_comp" in st.session_state: del st.session_state["sel_mes_comp"]
                 if "sel_ano_comp" in st.session_state: del st.session_state["sel_ano_comp"]
             
             del st.session_state["limpar_despesa_agora"]
 
-        # --- PADRÕES COMPETÊNCIA ---
+        # --- 2. CÁLCULO DE PADRÕES ---
         mes_atual_nome = MESES_PT[datetime.now().month]
         ano_atual_str = str(datetime.now().year)
         
+        # Índices padrão (Data Atual)
         idx_mes = list(MESES_PT.values()).index(mes_atual_nome)
         lista_anos = gerar_lista_anos()
         idx_ano = lista_anos.index(ano_atual_str) if ano_atual_str in lista_anos else 0
 
-        # Memória Competência (Recupera se existir)
+        # --- 3. LÓGICA DE FORÇAR MEMÓRIA (CORREÇÃO AQUI) ---
+        # Se o checkbox estiver marcado E tivermos memória, sobrescrevemos o estado do widget
         usar_anterior_comp = st.session_state.get("check_repetir_comp", False)
         if usar_anterior_comp and "memoria_mes" in st.session_state:
+            # Força o valor na sessão para que o widget obedeça
+            st.session_state["sel_mes_comp"] = st.session_state["memoria_mes"]
+            st.session_state["sel_ano_comp"] = st.session_state["memoria_ano"]
+            
+            # Atualiza índices visuais por garantia
             try:
                 if st.session_state["memoria_mes"] in list(MESES_PT.values()):
                     idx_mes = list(MESES_PT.values()).index(st.session_state["memoria_mes"])
@@ -176,16 +182,14 @@ if check_password():
         with col1:
             valor_str = st.text_input("Valor Total (R$)", value="0,00", key="val_desp", help="Ex: 4.000,00")
             
-            # Data de Liquidação
             data_liq = st.date_input("Data de Liquidação (Pagamento)", format="DD/MM/YYYY", key="data_liq_desp")
             
-            # NOVO CHECKBOX PARA DATA
             st.checkbox("Mesma data de liquidação da despesa anterior", 
                         key="check_repetir_data",
                         disabled="memoria_data_liq" not in st.session_state,
-                        on_change=atualizar_data_liq) # Ao clicar, já atualiza a data
+                        on_change=atualizar_data_liq)
 
-            st.markdown("---") # Espaço visual
+            st.markdown("---") 
             
             c_mes, c_ano = st.columns(2)
             with c_mes:
@@ -193,6 +197,7 @@ if check_password():
             with c_ano:
                 ano_selecionado = st.selectbox("Ano de Competência", lista_anos, index=idx_ano, key="sel_ano_comp")
             
+            # Checkbox de Competência (Ao marcar, o script roda e cai na lógica 3 lá em cima)
             st.checkbox("Mesmo ano e mês de competência da despesa salva anteriormente?", 
                         key="check_repetir_comp",
                         disabled="memoria_mes" not in st.session_state) 
@@ -243,7 +248,7 @@ if check_password():
                 # --- SALVA MEMÓRIAS ---
                 st.session_state["memoria_mes"] = mes_selecionado
                 st.session_state["memoria_ano"] = ano_selecionado
-                st.session_state["memoria_data_liq"] = data_liq  # Salva a data usada
+                st.session_state["memoria_data_liq"] = data_liq
 
                 # Ativa bandeira de limpeza
                 st.session_state["limpar_despesa_agora"] = True
