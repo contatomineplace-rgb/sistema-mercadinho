@@ -34,13 +34,10 @@ def carregar_dados():
 def carregar_fornecedores_df():
     try:
         df = conn.read(worksheet="fornecedores", ttl=0)
-        
-        # Garante colunas necessárias
         colunas_necessarias = ['nome', 'cnpj', 'telefone', 'login_app', 'senha_app']
         for col in colunas_necessarias:
             if col not in df.columns:
                 df[col] = pd.Series(dtype='str')
-                
         df = df.fillna("")
         df = df.astype(str)
         return df
@@ -116,7 +113,7 @@ if check_password():
     if menu == "Lançar Despesa":
         st.header("📉 Nova Despesa")
         
-        # Padrões iniciais (Mês/Ano Atual)
+        # --- LÓGICA DE PREENCHIMENTO ---
         mes_atual_nome = MESES_PT[datetime.now().month]
         ano_atual_str = str(datetime.now().year)
         
@@ -124,10 +121,8 @@ if check_password():
         lista_anos = gerar_lista_anos()
         idx_ano = lista_anos.index(ano_atual_str) if ano_atual_str in lista_anos else 0
 
-        # Lógica de memória (Checkbox)
+        # Verifica se checkbox de repetir está marcado
         usar_anterior = st.session_state.get("check_repetir_comp", False)
-        
-        # Se o checkbox estiver marcado E tivermos memória, sobrescreve os índices
         if usar_anterior and "memoria_mes" in st.session_state:
             try:
                 if st.session_state["memoria_mes"] in list(MESES_PT.values()):
@@ -137,33 +132,8 @@ if check_password():
             except:
                 pass 
 
+        # --- CAMPOS VISUAIS ---
         col1, col2 = st.columns(2)
         
         with col1:
-            # key=... é o segredo para poder limpar o campo depois
-            valor = st.number_input("Valor Total (R$)", min_value=0.01, format="%.2f", key="val_desp")
-            data_liq = st.date_input("Data de Liquidação (Pagamento)", format="DD/MM/YYYY", key="data_liq_desp")
-            
-            c_mes, c_ano = st.columns(2)
-            with c_mes:
-                mes_selecionado = st.selectbox("Mês de Competência", list(MESES_PT.values()), index=idx_mes, key="sel_mes_comp")
-            with c_ano:
-                ano_selecionado = st.selectbox("Ano de Competência", lista_anos, index=idx_ano, key="sel_ano_comp")
-            
-            # Checkbox de memória
-            st.checkbox("Mesmo ano e mês de competência da despesa salva anteriormente?", 
-                        key="check_repetir_comp",
-                        disabled="memoria_mes" not in st.session_state) 
-
-            status = st.selectbox("Status", ["Pago", "A Pagar"], key="status_desp")
-        
-        with col2:
-            lista_fornecedores = carregar_lista_nomes_fornecedores()
-            usar_novo_fornecedor = st.checkbox("Cadastrar Novo Fornecedor?", key="check_novo_forn")
-            
-            if usar_novo_fornecedor:
-                fornecedor = st.text_input("Digite o nome do novo fornecedor", key="txt_novo_forn")
-            else:
-                fornecedor = st.selectbox("Selecione o Fornecedor", [""] + lista_fornecedores, key="sel_forn")
-            
-            categoria = st.selectbox("Classificação", CATEGORIAS, key="cat_desp")
+            valor = st.number_input("Valor Total (R$)", min
