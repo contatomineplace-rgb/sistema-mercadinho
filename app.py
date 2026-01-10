@@ -116,7 +116,7 @@ if check_password():
     if menu == "Lançar Despesa":
         st.header("📉 Nova Despesa")
         
-        # Padrões iniciais (Mês/Ano Atual)
+        # --- LÓGICA DE PREENCHIMENTO ---
         mes_atual_nome = MESES_PT[datetime.now().month]
         ano_atual_str = str(datetime.now().year)
         
@@ -124,10 +124,8 @@ if check_password():
         lista_anos = gerar_lista_anos()
         idx_ano = lista_anos.index(ano_atual_str) if ano_atual_str in lista_anos else 0
 
-        # Lógica de memória (Checkbox)
+        # Verifica se checkbox de repetir está marcado
         usar_anterior = st.session_state.get("check_repetir_comp", False)
-        
-        # Se o checkbox estiver marcado E tivermos memória, sobrescreve os índices
         if usar_anterior and "memoria_mes" in st.session_state:
             try:
                 if st.session_state["memoria_mes"] in list(MESES_PT.values()):
@@ -137,20 +135,21 @@ if check_password():
             except:
                 pass 
 
+        # --- CAMPOS VISUAIS ---
         col1, col2 = st.columns(2)
         
         with col1:
-            # key=... é o segredo para poder limpar o campo depois
             valor = st.number_input("Valor Total (R$)", min_value=0.01, format="%.2f", key="val_desp")
             data_liq = st.date_input("Data de Liquidação (Pagamento)", format="DD/MM/YYYY", key="data_liq_desp")
             
+            # Competência
             c_mes, c_ano = st.columns(2)
             with c_mes:
                 mes_selecionado = st.selectbox("Mês de Competência", list(MESES_PT.values()), index=idx_mes, key="sel_mes_comp")
             with c_ano:
                 ano_selecionado = st.selectbox("Ano de Competência", lista_anos, index=idx_ano, key="sel_ano_comp")
             
-            # Checkbox de memória
+            # Checkbox de Memória
             st.checkbox("Mesmo ano e mês de competência da despesa salva anteriormente?", 
                         key="check_repetir_comp",
                         disabled="memoria_mes" not in st.session_state) 
@@ -169,7 +168,9 @@ if check_password():
             categoria = st.selectbox("Classificação", CATEGORIAS, key="cat_desp")
             obs = st.text_area("Observação", key="obs_desp")
 
-        if st.button("💾 Salvar Despesa"):
+        # --- BOTÃO DE SALVAR ---
+        st.markdown("---")
+        if st.button("💾 Salvar Despesa", type="primary", use_container_width=True):
             if not fornecedor:
                 st.warning("Preencha o fornecedor.")
             else:
@@ -193,24 +194,23 @@ if check_password():
                 salvar_lancamento(dados)
                 st.success("Despesa registrada com sucesso!")
                 
-                # Salva na memória para uso futuro
+                # Guarda memória para o próximo (se o checkbox estiver ativado)
                 st.session_state["memoria_mes"] = mes_selecionado
                 st.session_state["memoria_ano"] = ano_selecionado
 
-                # --- ROTINA DE LIMPEZA DE CAMPOS ---
-                # Apaga as chaves da sessão para forçar o reset dos widgets
+                # --- ROTINA DE LIMPEZA ---
+                # Remove os valores da sessão para que, ao recarregar, voltem ao padrão
                 chaves_limpar = [
                     "val_desp", "data_liq_desp", "status_desp", 
                     "sel_mes_comp", "sel_ano_comp", 
                     "check_novo_forn", "txt_novo_forn", "sel_forn", 
                     "cat_desp", "obs_desp"
-                    # Nota: NÃO limpamos "check_repetir_comp" para manter a escolha do usuário
                 ]
                 for chave in chaves_limpar:
                     if chave in st.session_state:
                         del st.session_state[chave]
                 
-                # Pausa rápida e recarga a página limpa
+                # Limpa o cache de dados (para ler a planilha atualizada) e recarrega a página
                 st.cache_data.clear()
                 st.rerun()
 
@@ -234,7 +234,8 @@ if check_password():
 
             obs = st.text_area("Observação", key="obs_rec")
             
-            if st.button("💾 Salvar Receita"):
+            st.markdown("---")
+            if st.button("💾 Salvar Receita", type="primary"):
                 mes_num = MESES_PT_INV[mes_rec]
                 comp_formatada = f"{ano_rec}-{mes_num:02d}"
 
