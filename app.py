@@ -28,7 +28,6 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 def carregar_dados():
     try:
-        # Carrega e cria um índice numérico se não existir
         df = conn.read(worksheet="lancamentos", ttl=0)
         return df
     except:
@@ -54,7 +53,6 @@ def carregar_lista_nomes_fornecedores():
 def salvar_fornecedor_rapido(novo_nome):
     try:
         df = carregar_fornecedores_df()
-        # Verifica se já existe (ignorando maiúsculas/minúsculas para evitar duplos)
         if novo_nome and novo_nome.strip().lower() not in df['nome'].str.lower().values:
             novo_registro = pd.DataFrame([{
                 "nome": novo_nome, "cnpj": "", "telefone": "", "login_app": "", "senha_app": ""
@@ -91,7 +89,6 @@ def salvar_lote_lancamentos(df_novos):
 def excluir_lancamentos(indices_para_excluir):
     try:
         df = conn.read(worksheet="lancamentos", ttl=0)
-        # Remove as linhas baseadas no índice
         df_atualizado = df.drop(indices_para_excluir).reset_index(drop=True)
         conn.update(worksheet="lancamentos", data=df_atualizado)
     except Exception as e:
@@ -145,12 +142,10 @@ if check_password():
     if menu == "Lançar Despesa":
         st.header("📉 Gestão de Despesas")
         
-        # Sub-abas para organizar as funções
         tab_individual, tab_lote, tab_excluir = st.tabs(["📝 Individual", "📚 Despesa em Lote", "🗑️ Excluir Despesa"])
 
-        # === 1. LANÇAMENTO INDIVIDUAL (Seu código original melhorado) ===
+        # === 1. LANÇAMENTO INDIVIDUAL ===
         with tab_individual:
-            # Lógica de Limpeza
             if "limpar_despesa_agora" in st.session_state:
                 st.session_state["val_desp"] = "0,00"
                 st.session_state["obs_desp"] = ""
@@ -169,19 +164,16 @@ if check_password():
                 
                 del st.session_state["limpar_despesa_agora"]
 
-            # Padrões
             mes_atual_nome = MESES_PT[datetime.now().month]
             ano_atual_str = str(datetime.now().year)
             idx_mes = list(MESES_PT.values()).index(mes_atual_nome)
             lista_anos = gerar_lista_anos()
             idx_ano = lista_anos.index(ano_atual_str) if ano_atual_str in lista_anos else 0
 
-            # Memória Comp
             usar_anterior_comp = st.session_state.get("check_repetir_comp", False)
             if usar_anterior_comp and "memoria_mes" in st.session_state:
                 st.session_state["sel_mes_comp"] = st.session_state["memoria_mes"]
                 st.session_state["sel_ano_comp"] = st.session_state["memoria_ano"]
-                # Tenta ajustar índices
                 try:
                     if st.session_state["memoria_mes"] in list(MESES_PT.values()):
                         idx_mes = list(MESES_PT.values()).index(st.session_state["memoria_mes"])
@@ -243,13 +235,12 @@ if check_password():
 
         # === 2. LANÇAMENTO EM LOTE ===
         with tab_lote:
-            st.info("💡 Dica: Digite o nome do fornecedor. Se ele não existir, o sistema irá cadastrá-lo automaticamente ao salvar.")
+            st.info("💡 **Dica:** Esta tabela funciona como o Excel. Você pode selecionar uma linha, apertar **Ctrl+C**, selecionar as linhas de baixo e apertar **Ctrl+V** para colar.")
             
-            # Prepara a estrutura da tabela
             lista_anos = gerar_lista_anos()
             
-            # Cria um DataFrame vazio com as colunas necessárias para o editor
-            df_template = pd.DataFrame([{
+            # CRIA 10 LINHAS VAZIAS PARA FACILITAR A COLAGEM
+            linhas_iniciais = [{
                 "valor": 0.0,
                 "data_liquidacao": datetime.today(),
                 "mes_competencia": MESES_PT[datetime.today().month],
@@ -258,9 +249,10 @@ if check_password():
                 "categoria": "Mercadoria",
                 "observacao": "",
                 "status": "Pago"
-            }])
+            } for _ in range(10)]
+            
+            df_template = pd.DataFrame(linhas_iniciais)
 
-            # Editor de Dados
             lote_editado = st.data_editor(
                 df_template,
                 num_rows="dynamic",
@@ -282,29 +274,24 @@ if check_password():
                 if lote_editado.empty:
                     st.warning("A tabela está vazia.")
                 else:
-                    # Lista de fornecedores atuais para checagem
                     df_forn_atual = carregar_fornecedores_df()
                     nomes_forn_existentes = set(df_forn_atual['nome'].str.lower().values)
-                    novos_fornecedores = []
-
+                    
                     lista_dados_finais = []
                     
                     for index, row in lote_editado.iterrows():
-                        # Pula linhas vazias de fornecedor ou valor 0
+                        # Ignora linhas não preenchidas ou com valor zero
                         if not row['fornecedor'] or row['valor'] == 0:
                             continue
 
-                        # 1. Checagem e cadastro de fornecedor
                         nome_forn = str(row['fornecedor']).strip()
                         if nome_forn.lower() not in nomes_forn_existentes:
                             salvar_fornecedor_rapido(nome_forn)
-                            nomes_forn_existentes.add(nome_forn.lower()) # Adiciona ao cache local para não duplicar no loop
+                            nomes_forn_existentes.add(nome_forn.lower()) 
 
-                        # 2. Formata competência
                         mes_num = MESES_PT_INV[row['mes_competencia']]
                         comp_fmt = f"{row['ano_competencia']}-{mes_num:02d}"
 
-                        # 3. Prepara linha
                         dados_linha = {
                             "data_registro": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             "tipo": "Despesa",
@@ -326,61 +313,41 @@ if check_password():
                         st.cache_data.clear()
                         st.rerun()
                     else:
-                        st.warning("Nenhuma linha válida para salvar.")
+                        st.warning("Nenhuma linha válida para salvar (verifique se preencheu fornecedor e valor).")
 
         # === 3. EXCLUIR DESPESA ===
         with tab_excluir:
             st.subheader("🔍 Localizar e Excluir")
-            
             df_dados = carregar_dados()
             
             if not df_dados.empty:
-                # Tratamento de tipos
                 df_dados['valor'] = pd.to_numeric(df_dados['valor'])
                 df_dados['data_liquidacao'] = pd.to_datetime(df_dados['data_liquidacao'])
                 
-                # Filtros
                 col_f1, col_f2, col_f3 = st.columns(3)
-                
                 with col_f1:
-                    # Filtro Ano
                     anos_disponiveis = sorted(df_dados['competencia'].str[:4].unique())
                     filtro_ano = st.multiselect("Filtrar por Ano", anos_disponiveis)
-                
                 with col_f2:
-                    # Filtro Mês
                     meses_disponiveis = sorted(df_dados['competencia'].str[5:].unique())
                     filtro_mes = st.multiselect("Filtrar por Mês (Numérico)", meses_disponiveis)
-                
                 with col_f3:
-                    # Filtro Valor
                     valor_min = float(df_dados['valor'].min())
                     valor_max = float(df_dados['valor'].max())
                     filtro_valor = st.slider("Faixa de Valor", valor_min, valor_max, (valor_min, valor_max))
 
-                # Aplica Filtros
                 df_filtrado = df_dados.copy()
-                if filtro_ano:
-                    df_filtrado = df_filtrado[df_filtrado['competencia'].str[:4].isin(filtro_ano)]
-                if filtro_mes:
-                    df_filtrado = df_filtrado[df_filtrado['competencia'].str[5:].isin(filtro_mes)]
-                
-                df_filtrado = df_filtrado[
-                    (df_filtrado['valor'] >= filtro_valor[0]) & 
-                    (df_filtrado['valor'] <= filtro_valor[1])
-                ]
-                
-                # Filtra apenas despesas
+                if filtro_ano: df_filtrado = df_filtrado[df_filtrado['competencia'].str[:4].isin(filtro_ano)]
+                if filtro_mes: df_filtrado = df_filtrado[df_filtrado['competencia'].str[5:].isin(filtro_mes)]
+                df_filtrado = df_filtrado[(df_filtrado['valor'] >= filtro_valor[0]) & (df_filtrado['valor'] <= filtro_valor[1])]
                 df_filtrado = df_filtrado[df_filtrado['tipo'] == 'Despesa']
 
                 st.markdown(f"**Encontrados:** {len(df_filtrado)} registros.")
 
                 if not df_filtrado.empty:
-                    # Adiciona coluna de seleção
                     df_filtrado_view = df_filtrado.copy()
                     df_filtrado_view.insert(0, "Excluir?", False)
 
-                    # Mostra editor para seleção
                     editor_exclusao = st.data_editor(
                         df_filtrado_view,
                         column_config={
@@ -393,13 +360,11 @@ if check_password():
                         use_container_width=True
                     )
 
-                    # Identifica linhas marcadas
                     linhas_marcadas = editor_exclusao[editor_exclusao["Excluir?"] == True]
 
                     if not linhas_marcadas.empty:
                         st.error(f"Você selecionou {len(linhas_marcadas)} itens para exclusão.")
                         if st.button("🗑️ CONFIRMAR EXCLUSÃO"):
-                            # Pega os índices originais do dataframe filtrado para deletar no principal
                             indices_para_deletar = linhas_marcadas.index.tolist()
                             excluir_lancamentos(indices_para_deletar)
                             st.success("Registros excluídos com sucesso!")
@@ -411,11 +376,9 @@ if check_password():
             else:
                 st.info("Não há dados cadastrados.")
 
-
-    # --- ABA: LANÇAR RECEITA (Mantida igual, apenas com a lógica de limpeza) ---
+    # --- ABA: LANÇAR RECEITA ---
     elif menu == "Lançar Receita":
         st.header("📈 Nova Receita")
-        
         if "limpar_receita_agora" in st.session_state:
             st.session_state["val_rec"] = "0,00"
             st.session_state["obs_rec"] = ""
