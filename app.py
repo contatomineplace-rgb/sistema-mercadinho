@@ -307,4 +307,41 @@ if check_password():
             st.dataframe(
                 df_view.sort_values("data_liquidacao", ascending=False), 
                 use_container_width=True,
-                column_config
+                column_config={
+                    "data_liquidacao": st.column_config.DateColumn("Data Liq.", format="DD/MM/YYYY")
+                }
+            )
+        else:
+            st.info("Nenhum dado lançado ainda.")
+
+    # --- ABA: CONFIGURAÇÕES ---
+    elif menu == "Configurações":
+        st.header("⚙️ Configurações")
+        
+        tab_fornecedores, tab_outros = st.tabs(["🏭 Fornecedores", "Outros"])
+        
+        with tab_fornecedores:
+            st.subheader("Gerenciar Fornecedores")
+            st.info("Edite os nomes e dados de acesso. Clique em 'Salvar Alterações' para confirmar.")
+            
+            df_fornecedores = carregar_fornecedores_df()
+            
+            df_editado = st.data_editor(
+                df_fornecedores,
+                num_rows="dynamic", 
+                column_config={
+                    "nome": st.column_config.TextColumn("Nome do Fornecedor", required=True),
+                    "cnpj": st.column_config.TextColumn("CNPJ"),
+                    "telefone": st.column_config.TextColumn("Telefone"),
+                    "login_app": st.column_config.TextColumn("Login App"),
+                    "senha_app": st.column_config.TextColumn("Senha App")
+                },
+                use_container_width=True,
+                hide_index=True
+            )
+            
+            if st.button("💾 Salvar Alterações nos Fornecedores"):
+                salvar_tabela_fornecedores(df_editado)
+                st.success("Lista de fornecedores atualizada com sucesso!")
+                st.cache_data.clear()
+                st.rerun()
