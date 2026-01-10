@@ -34,29 +34,42 @@ def carregar_dados():
 def carregar_fornecedores_df():
     try:
         df = conn.read(worksheet="fornecedores", ttl=0)
-        if 'nome' not in df.columns:
-            df['nome'] = pd.Series(dtype='str')
-        if 'cnpj' not in df.columns:
-            df['cnpj'] = pd.Series(dtype='str')
+        
+        # Garante que todas as colunas existem
+        colunas_necessarias = ['nome', 'cnpj', 'telefone', 'login_app', 'senha_app']
+        for col in colunas_necessarias:
+            if col not in df.columns:
+                df[col] = pd.Series(dtype='str')
+                
+        # Limpeza e conversão para texto
         df = df.fillna("")
         df = df.astype(str)
         return df
     except:
-        return pd.DataFrame(columns=['nome', 'cnpj'])
+        return pd.DataFrame(columns=['nome', 'cnpj', 'telefone', 'login_app', 'senha_app'])
 
 def carregar_lista_nomes_fornecedores():
     df = carregar_fornecedores_df()
     return df['nome'].dropna().unique().tolist()
 
 def salvar_fornecedor_rapido(novo_nome):
+    # Salva apenas o nome quando criado pela tela de despesa (outros campos ficam vazios)
     try:
         df = carregar_fornecedores_df()
         if novo_nome and novo_nome not in df['nome'].values:
-            novo_registro = pd.DataFrame([{"nome": novo_nome, "cnpj": ""}])
+            novo_registro = pd.DataFrame([{
+                "nome": novo_nome, 
+                "cnpj": "", 
+                "telefone": "", 
+                "login_app": "", 
+                "senha_app": ""
+            }])
             df_atualizado = pd.concat([df, novo_registro], ignore_index=True)
             conn.update(worksheet="fornecedores", data=df_atualizado)
     except:
-        novo_registro = pd.DataFrame([{"nome": novo_nome, "cnpj": ""}])
+        novo_registro = pd.DataFrame([{
+            "nome": novo_nome, "cnpj": "", "telefone": "", "login_app": "", "senha_app": ""
+        }])
         conn.update(worksheet="fornecedores", data=novo_registro)
 
 def salvar_tabela_fornecedores(df_editado):
@@ -109,7 +122,6 @@ if check_password():
     if menu == "Lançar Despesa":
         st.header("📉 Nova Despesa")
         
-        # 1. LÓGICA (Calcula os índices antes de desenhar)
         mes_atual_nome = MESES_PT[datetime.now().month]
         ano_atual_str = str(datetime.now().year)
         
@@ -117,9 +129,8 @@ if check_password():
         lista_anos = gerar_lista_anos()
         idx_ano = lista_anos.index(ano_atual_str) if ano_atual_str in lista_anos else 0
 
-        # Verifica se o checkbox (que será desenhado lá embaixo) está marcado no Session State
+        # Verifica memória de checkbox
         usar_anterior = st.session_state.get("check_repetir_comp", False)
-        
         if usar_anterior and "memoria_mes" in st.session_state:
             try:
                 idx_mes = list(MESES_PT.values()).index(st.session_state["memoria_mes"])
@@ -128,21 +139,18 @@ if check_password():
             except:
                 pass 
 
-        # 2. DESENHO DA TELA
         col1, col2 = st.columns(2)
         
         with col1:
             valor = st.number_input("Valor Total (R$)", min_value=0.01, format="%.2f", key="val_desp")
             data_liq = st.date_input("Data de Liquidação (Pagamento)", format="DD/MM/YYYY", key="data_liq_desp")
             
-            # Colunas Mês e Ano
             c_mes, c_ano = st.columns(2)
             with c_mes:
                 mes_selecionado = st.selectbox("Mês de Competência", list(MESES_PT.values()), index=idx_mes, key="sel_mes_comp")
             with c_ano:
                 ano_selecionado = st.selectbox("Ano de Competência", lista_anos, index=idx_ano, key="sel_ano_comp")
             
-            # --- CHECKBOX AGORA ESTÁ AQUI EMBAIXO ---
             st.checkbox("Mesmo ano e mês de competência da despesa salva anteriormente?", 
                         key="check_repetir_comp",
                         disabled="memoria_mes" not in st.session_state) 
@@ -185,11 +193,10 @@ if check_password():
                 salvar_lancamento(dados)
                 st.success("Despesa registrada com sucesso!")
                 
-                # Salva na memória
                 st.session_state["memoria_mes"] = mes_selecionado
                 st.session_state["memoria_ano"] = ano_selecionado
 
-                # Limpeza (Mantém check_repetir_comp para o usuário decidir se desmarca ou não)
+                # Limpeza
                 chaves_para_limpar = ["val_desp", "data_liq_desp", "status_desp", "sel_mes_comp", "sel_ano_comp",
                                       "check_novo_forn", "txt_novo_forn", "sel_forn", "cat_desp", "obs_desp"]
                 for chave in chaves_para_limpar:
@@ -310,16 +317,20 @@ if check_password():
         
         with tab_fornecedores:
             st.subheader("Gerenciar Fornecedores")
-            st.info("Edite os nomes, adicione CNPJs ou exclua linhas. Clique em 'Salvar Alterações' para confirmar.")
+            st.info("Edite os nomes e dados de acesso. Clique em 'Salvar Alterações' para confirmar.")
             
             df_fornecedores = carregar_fornecedores_df()
             
+            # Editor de Dados com novas colunas
             df_editado = st.data_editor(
                 df_fornecedores,
                 num_rows="dynamic", 
                 column_config={
                     "nome": st.column_config.TextColumn("Nome do Fornecedor", required=True),
-                    "cnpj": st.column_config.TextColumn("CNPJ (Opcional)")
+                    "cnpj": st.column_config.TextColumn("CNPJ"),
+                    "telefone": st.column_config.TextColumn("Telefone"),
+                    "login_app": st.column_config.TextColumn("Login App"),
+                    "senha_app": st.column_config.TextColumn("Senha App")
                 },
                 use_container_width=True,
                 hide_index=True
