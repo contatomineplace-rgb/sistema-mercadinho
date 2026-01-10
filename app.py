@@ -99,50 +99,26 @@ def gerar_lista_anos():
     return [str(ano) for ano in range(2025, ano_atual + 3)]
 
 def converter_moeda_br_para_float(valor_str):
-    """Converte string formatada (1.000,00) para float (1000.0) para salvar no banco"""
     if not valor_str: return 0.0
     if isinstance(valor_str, (int, float)): return float(valor_str)
-    # Remove R$, espaços e pontos de milhar
-    limpo = str(valor_str).replace("R$", "").replace(" ", "").replace(".", "")
-    # Troca vírgula decimal por ponto
-    limpo = limpo.replace(",", ".")
+    limpo = str(valor_str).replace("R$", "").replace(" ", "").replace(".", "").replace(",", ".")
     try:
         return float(limpo)
     except ValueError:
         return 0.0
 
-# --- FUNÇÃO DE FORMATAÇÃO AUTOMÁTICA (CALLBACK) ---
 def formatar_input_br(key):
-    """
-    Lê o valor digitado pelo usuário, limpa e formata de volta 
-    para o padrão brasileiro (ex: 1234.5 -> 1.234,50)
-    """
     valor_digitado = st.session_state[key]
-    if not valor_digitado:
-        return
-    
-    # Tenta converter o que foi digitado para número
-    # Aceita tanto 1000.50 quanto 1000,50
+    if not valor_digitado: return
     try:
-        # Lógica: Se tem vírgula, assume que é decimal. Se só tem ponto, verifica.
         limpo = valor_digitado.replace("R$", "").strip()
-        
-        # Caso o usuário digite no formato BR correto (1.000,00), removemos os pontos de milhar primeiro
-        if "," in limpo and "." in limpo:
-             limpo = limpo.replace(".", "").replace(",", ".")
-        elif "," in limpo:
-             limpo = limpo.replace(",", ".")
-        
+        if "," in limpo and "." in limpo: limpo = limpo.replace(".", "").replace(",", ".")
+        elif "," in limpo: limpo = limpo.replace(",", ".")
         valor_float = float(limpo)
-        
-        # Formata de volta para BR: {:,.2f} gera 1,000.00 -> trocamos os sinais
         formatado = "{:,.2f}".format(valor_float).replace(",", "X").replace(".", ",").replace("X", ".")
         st.session_state[key] = formatado
-    except:
-        # Se não conseguir converter, deixa como está
-        pass
+    except: pass
 
-# --- CALLBACKS DE INTERFACE ---
 def atualizar_data_liq():
     if st.session_state.get("check_repetir_data") and "memoria_data_liq" in st.session_state:
         st.session_state["data_liq_desp"] = st.session_state["memoria_data_liq"]
@@ -181,30 +157,38 @@ if check_password():
 
         # === 1. LANÇAMENTO INDIVIDUAL ===
         with tab_individual:
+            # --- LIMPEZA: Define como None/Vazio ---
             if "limpar_despesa_agora" in st.session_state:
-                st.session_state["val_desp"] = "0,00"
+                st.session_state["val_desp"] = "" # Vazio
                 st.session_state["obs_desp"] = ""
-                st.session_state["sel_forn"] = ""
+                st.session_state["sel_forn"] = None # None
                 st.session_state["txt_novo_forn"] = ""
                 st.session_state["check_novo_forn"] = False
                 
+                # Reseta data apenas se não for repetir
                 if st.session_state.get("check_repetir_data", False) and "memoria_data_liq" in st.session_state:
                     st.session_state["data_liq_desp"] = st.session_state["memoria_data_liq"]
                 else:
-                    st.session_state["data_liq_desp"] = datetime.now()
+                    st.session_state["data_liq_desp"] = None # Data Vazia
 
+                # Reseta competência apenas se não for repetir
                 if not st.session_state.get("check_repetir_comp", False):
+                    # Removemos as chaves para que o widget reinicie com index=None
                     if "sel_mes_comp" in st.session_state: del st.session_state["sel_mes_comp"]
                     if "sel_ano_comp" in st.session_state: del st.session_state["sel_ano_comp"]
                 
+                # Reseta outros selects
+                if "status_desp" in st.session_state: del st.session_state["status_desp"]
+                if "cat_desp" in st.session_state: del st.session_state["cat_desp"]
+
                 del st.session_state["limpar_despesa_agora"]
 
-            mes_atual_nome = MESES_PT[datetime.now().month]
-            ano_atual_str = str(datetime.now().year)
-            idx_mes = list(MESES_PT.values()).index(mes_atual_nome)
+            # --- PADRÕES INICIAIS (Começa tudo Vazio/None, exceto se tiver memória) ---
+            idx_mes = None
+            idx_ano = None
             lista_anos = gerar_lista_anos()
-            idx_ano = lista_anos.index(ano_atual_str) if ano_atual_str in lista_anos else 0
 
+            # Memória Competência
             usar_anterior_comp = st.session_state.get("check_repetir_comp", False)
             if usar_anterior_comp and "memoria_mes" in st.session_state:
                 st.session_state["sel_mes_comp"] = st.session_state["memoria_mes"]
@@ -218,37 +202,59 @@ if check_password():
 
             col1, col2 = st.columns(2)
             with col1:
-                # CAMPO DE VALOR COM FORMATAÇÃO AUTOMÁTICA
+                # CAMPO VALOR (Inicia vazio)
                 valor_str = st.text_input(
                     "Valor Total (R$)", 
-                    value="0,00", 
+                    value="",  # Inicia vazio
                     key="val_desp", 
-                    help="Digite o valor. Ao sair do campo, ele será formatado automaticamente.",
-                    on_change=formatar_input_br, # Chama a formatação ao apertar Enter ou sair
-                    args=("val_desp",) # Passa a chave do próprio campo
+                    help="Digite o valor (ex: 150,00).",
+                    on_change=formatar_input_br,
+                    args=("val_desp",)
                 )
 
-                data_liq = st.date_input("Data de Liquidação (Pagamento)", format="DD/MM/YYYY", key="data_liq_desp")
+                # CAMPO DATA (Inicia vazio = None)
+                data_liq = st.date_input("Data de Liquidação (Pagamento)", value=None, format="DD/MM/YYYY", key="data_liq_desp")
+                
                 st.checkbox("Mesma data de liquidação da despesa anterior", key="check_repetir_data", disabled="memoria_data_liq" not in st.session_state, on_change=atualizar_data_liq)
                 st.markdown("---") 
+                
                 c_mes, c_ano = st.columns(2)
-                with c_mes: mes_selecionado = st.selectbox("Mês de Competência", list(MESES_PT.values()), index=idx_mes, key="sel_mes_comp")
-                with c_ano: ano_selecionado = st.selectbox("Ano de Competência", lista_anos, index=idx_ano, key="sel_ano_comp")
+                with c_mes: 
+                    # index=None inicia com "Selecione..."
+                    mes_selecionado = st.selectbox("Mês de Competência", list(MESES_PT.values()), index=idx_mes, placeholder="Selecione o Mês", key="sel_mes_comp")
+                with c_ano: 
+                    ano_selecionado = st.selectbox("Ano de Competência", lista_anos, index=idx_ano, placeholder="Selecione o Ano", key="sel_ano_comp")
+                
                 st.checkbox("Mesmo ano e mês de competência da despesa salva anteriormente?", key="check_repetir_comp", disabled="memoria_mes" not in st.session_state) 
-                status = st.selectbox("Status", ["Pago", "A Pagar"], key="status_desp")
+                
+                status = st.selectbox("Status", ["Pago", "A Pagar"], index=None, placeholder="Selecione o Status", key="status_desp")
             
             with col2:
                 lista_fornecedores = carregar_lista_nomes_fornecedores()
                 usar_novo_fornecedor = st.checkbox("Cadastrar Novo Fornecedor?", key="check_novo_forn")
-                if usar_novo_fornecedor: fornecedor = st.text_input("Digite o nome do novo fornecedor", key="txt_novo_forn")
-                else: fornecedor = st.selectbox("Selecione o Fornecedor", [""] + lista_fornecedores, key="sel_forn")
-                categoria = st.selectbox("Classificação", CATEGORIAS, key="cat_desp")
+                
+                if usar_novo_fornecedor: 
+                    fornecedor = st.text_input("Digite o nome do novo fornecedor", key="txt_novo_forn")
+                else: 
+                    fornecedor = st.selectbox("Selecione o Fornecedor", [""] + lista_fornecedores, index=None, placeholder="Selecione o Fornecedor", key="sel_forn")
+                
+                categoria = st.selectbox("Classificação", CATEGORIAS, index=None, placeholder="Selecione a Categoria", key="cat_desp")
                 obs = st.text_area("Observação", key="obs_desp")
 
             st.markdown("---")
             if st.button("💾 Salvar Despesa", type="primary", use_container_width=True):
-                if not fornecedor:
-                    st.warning("Preencha o fornecedor.")
+                # VALIDAÇÃO: Impede salvar se tiver campos vazios
+                erro_campos = []
+                if not valor_str: erro_campos.append("Valor Total")
+                if not data_liq: erro_campos.append("Data de Liquidação")
+                if not mes_selecionado: erro_campos.append("Mês de Competência")
+                if not ano_selecionado: erro_campos.append("Ano de Competência")
+                if not status: erro_campos.append("Status")
+                if not categoria: erro_campos.append("Classificação")
+                if not fornecedor: erro_campos.append("Fornecedor")
+
+                if erro_campos:
+                    st.warning(f"⚠️ Por favor, preencha os seguintes campos antes de salvar: {', '.join(erro_campos)}")
                 else:
                     valor_float = converter_moeda_br_para_float(valor_str)
                     if usar_novo_fornecedor: salvar_fornecedor_rapido(fornecedor)
@@ -283,7 +289,6 @@ if check_password():
             
             lista_anos = gerar_lista_anos()
             
-            # Linhas vazias (None)
             linhas_iniciais = [{
                 "valor": None,
                 "data_liquidacao": None,
@@ -302,7 +307,6 @@ if check_password():
                 num_rows="dynamic",
                 use_container_width=True,
                 column_config={
-                    # Aqui usamos o formatador nativo da tabela para exibir R$
                     "valor": st.column_config.NumberColumn("Valor (R$)", min_value=0.0, format="R$ %.2f", required=True),
                     "data_liquidacao": st.column_config.DateColumn("Data Pagamento", format="DD/MM/YYYY", required=True),
                     "mes_competencia": st.column_config.SelectboxColumn("Mês Comp.", options=list(MESES_PT.values()), required=True),
@@ -430,9 +434,9 @@ if check_password():
     elif menu == "Lançar Receita":
         st.header("📈 Nova Receita")
         if "limpar_receita_agora" in st.session_state:
-            st.session_state["val_rec"] = "0,00"
+            st.session_state["val_rec"] = ""
             st.session_state["obs_rec"] = ""
-            st.session_state["data_rec"] = datetime.now()
+            st.session_state["data_rec"] = None
             if "mes_rec" in st.session_state: del st.session_state["mes_rec"]
             if "ano_rec" in st.session_state: del st.session_state["ano_rec"]
             del st.session_state["limpar_receita_agora"]
@@ -442,17 +446,8 @@ if check_password():
         lista_anos = gerar_lista_anos()
 
         with st.container():
-            # APLICA A MESMA FORMATAÇÃO NA RECEITA
-            valor_str = st.text_input(
-                "Valor Receita (R$)", 
-                value="0,00", 
-                key="val_rec", 
-                help="Digite o valor (ex: 12000). Ele será formatado automaticamente ao sair.",
-                on_change=formatar_input_br,
-                args=("val_rec",)
-            )
-            
-            data_liq = st.date_input("Data Recebimento", format="DD/MM/YYYY", key="data_rec")
+            valor_str = st.text_input("Valor Receita (R$)", value="", key="val_rec", help="Ex: 15.000,00", on_change=formatar_input_br, args=("val_rec",))
+            data_liq = st.date_input("Data Recebimento", value=None, format="DD/MM/YYYY", key="data_rec")
             c_mes, c_ano = st.columns(2)
             with c_mes: mes_rec = st.selectbox("Mês Competência", list(MESES_PT.values()), index=idx_mes, key="mes_rec")
             with c_ano: ano_rec = st.selectbox("Ano Competência", lista_anos, key="ano_rec")
@@ -460,26 +455,29 @@ if check_password():
             
             st.markdown("---")
             if st.button("💾 Salvar Receita", type="primary"):
-                valor_float = converter_moeda_br_para_float(valor_str)
-                mes_num = MESES_PT_INV[mes_rec]
-                comp_formatada = f"{ano_rec}-{mes_num:02d}"
-                dados = {
-                    "data_registro": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "tipo": "Receita",
-                    "valor": valor_float,
-                    "fornecedor": "Cliente Final",
-                    "data_liquidacao": data_liq.strftime("%Y-%m-%d"),
-                    "competencia": comp_formatada,
-                    "status": "Recebido",
-                    "categoria": "Vendas",
-                    "observacao": obs
-                }
-                salvar_lancamento(dados)
-                st.success("Receita registrada! Limpando em 3 segundos...")
-                time.sleep(3)
-                st.session_state["limpar_receita_agora"] = True
-                st.cache_data.clear()
-                st.rerun()
+                if not valor_str or not data_liq:
+                    st.warning("Preencha o Valor e a Data.")
+                else:
+                    valor_float = converter_moeda_br_para_float(valor_str)
+                    mes_num = MESES_PT_INV[mes_rec]
+                    comp_formatada = f"{ano_rec}-{mes_num:02d}"
+                    dados = {
+                        "data_registro": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "tipo": "Receita",
+                        "valor": valor_float,
+                        "fornecedor": "Cliente Final",
+                        "data_liquidacao": data_liq.strftime("%Y-%m-%d"),
+                        "competencia": comp_formatada,
+                        "status": "Recebido",
+                        "categoria": "Vendas",
+                        "observacao": obs
+                    }
+                    salvar_lancamento(dados)
+                    st.success("Receita registrada! Limpando em 3 segundos...")
+                    time.sleep(3)
+                    st.session_state["limpar_receita_agora"] = True
+                    st.cache_data.clear()
+                    st.rerun()
 
     # --- ABA: RELATÓRIOS ---
     elif menu == "Relatórios":
