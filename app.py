@@ -99,15 +99,50 @@ def gerar_lista_anos():
     return [str(ano) for ano in range(2025, ano_atual + 3)]
 
 def converter_moeda_br_para_float(valor_str):
+    """Converte string formatada (1.000,00) para float (1000.0) para salvar no banco"""
     if not valor_str: return 0.0
     if isinstance(valor_str, (int, float)): return float(valor_str)
-    limpo = str(valor_str).replace("R$", "").replace(" ", "").replace(".", "").replace(",", ".")
+    # Remove R$, espaços e pontos de milhar
+    limpo = str(valor_str).replace("R$", "").replace(" ", "").replace(".", "")
+    # Troca vírgula decimal por ponto
+    limpo = limpo.replace(",", ".")
     try:
         return float(limpo)
     except ValueError:
         return 0.0
 
-# --- CALLBACKS ---
+# --- FUNÇÃO DE FORMATAÇÃO AUTOMÁTICA (CALLBACK) ---
+def formatar_input_br(key):
+    """
+    Lê o valor digitado pelo usuário, limpa e formata de volta 
+    para o padrão brasileiro (ex: 1234.5 -> 1.234,50)
+    """
+    valor_digitado = st.session_state[key]
+    if not valor_digitado:
+        return
+    
+    # Tenta converter o que foi digitado para número
+    # Aceita tanto 1000.50 quanto 1000,50
+    try:
+        # Lógica: Se tem vírgula, assume que é decimal. Se só tem ponto, verifica.
+        limpo = valor_digitado.replace("R$", "").strip()
+        
+        # Caso o usuário digite no formato BR correto (1.000,00), removemos os pontos de milhar primeiro
+        if "," in limpo and "." in limpo:
+             limpo = limpo.replace(".", "").replace(",", ".")
+        elif "," in limpo:
+             limpo = limpo.replace(",", ".")
+        
+        valor_float = float(limpo)
+        
+        # Formata de volta para BR: {:,.2f} gera 1,000.00 -> trocamos os sinais
+        formatado = "{:,.2f}".format(valor_float).replace(",", "X").replace(".", ",").replace("X", ".")
+        st.session_state[key] = formatado
+    except:
+        # Se não conseguir converter, deixa como está
+        pass
+
+# --- CALLBACKS DE INTERFACE ---
 def atualizar_data_liq():
     if st.session_state.get("check_repetir_data") and "memoria_data_liq" in st.session_state:
         st.session_state["data_liq_desp"] = st.session_state["memoria_data_liq"]
@@ -183,7 +218,16 @@ if check_password():
 
             col1, col2 = st.columns(2)
             with col1:
-                valor_str = st.text_input("Valor Total (R$)", value="0,00", key="val_desp", help="Ex: 4.000,00")
+                # CAMPO DE VALOR COM FORMATAÇÃO AUTOMÁTICA
+                valor_str = st.text_input(
+                    "Valor Total (R$)", 
+                    value="0,00", 
+                    key="val_desp", 
+                    help="Digite o valor. Ao sair do campo, ele será formatado automaticamente.",
+                    on_change=formatar_input_br, # Chama a formatação ao apertar Enter ou sair
+                    args=("val_desp",) # Passa a chave do próprio campo
+                )
+
                 data_liq = st.date_input("Data de Liquidação (Pagamento)", format="DD/MM/YYYY", key="data_liq_desp")
                 st.checkbox("Mesma data de liquidação da despesa anterior", key="check_repetir_data", disabled="memoria_data_liq" not in st.session_state, on_change=atualizar_data_liq)
                 st.markdown("---") 
@@ -235,11 +279,11 @@ if check_password():
 
         # === 2. LANÇAMENTO EM LOTE ===
         with tab_lote:
-            st.info("💡 Use **Ctrl+C** e **Ctrl+V** para copiar e colar linhas.")
+            st.info("💡 **Dica:** Copie e cole do Excel. O valor será formatado automaticamente na tabela.")
             
             lista_anos = gerar_lista_anos()
             
-            # --- MUDANÇA AQUI: Inicia com None (Vazio) ---
+            # Linhas vazias (None)
             linhas_iniciais = [{
                 "valor": None,
                 "data_liquidacao": None,
@@ -258,7 +302,8 @@ if check_password():
                 num_rows="dynamic",
                 use_container_width=True,
                 column_config={
-                    "valor": st.column_config.NumberColumn("Valor (R$)", min_value=0.0, format="%.2f", required=True),
+                    # Aqui usamos o formatador nativo da tabela para exibir R$
+                    "valor": st.column_config.NumberColumn("Valor (R$)", min_value=0.0, format="R$ %.2f", required=True),
                     "data_liquidacao": st.column_config.DateColumn("Data Pagamento", format="DD/MM/YYYY", required=True),
                     "mes_competencia": st.column_config.SelectboxColumn("Mês Comp.", options=list(MESES_PT.values()), required=True),
                     "ano_competencia": st.column_config.SelectboxColumn("Ano Comp.", options=lista_anos, required=True),
@@ -281,11 +326,9 @@ if check_password():
                     erro_encontrado = False
                     
                     for index, row in lote_editado.iterrows():
-                        # Pula linhas totalmente vazias
                         if not row['fornecedor'] and pd.isna(row['valor']):
                             continue
                             
-                        # Verifica se preencheu tudo o que é obrigatório na linha
                         if not row['fornecedor'] or pd.isna(row['valor']) or pd.isna(row['data_liquidacao']) or not row['mes_competencia'] or not row['ano_competencia']:
                             st.warning(f"Linha {index + 1} incompleta. Verifique Valor, Data, Competência e Fornecedor.")
                             erro_encontrado = True
@@ -399,7 +442,16 @@ if check_password():
         lista_anos = gerar_lista_anos()
 
         with st.container():
-            valor_str = st.text_input("Valor Receita (R$)", value="0,00", key="val_rec", help="Ex: 15.000,00")
+            # APLICA A MESMA FORMATAÇÃO NA RECEITA
+            valor_str = st.text_input(
+                "Valor Receita (R$)", 
+                value="0,00", 
+                key="val_rec", 
+                help="Digite o valor (ex: 12000). Ele será formatado automaticamente ao sair.",
+                on_change=formatar_input_br,
+                args=("val_rec",)
+            )
+            
             data_liq = st.date_input("Data Recebimento", format="DD/MM/YYYY", key="data_rec")
             c_mes, c_ano = st.columns(2)
             with c_mes: mes_rec = st.selectbox("Mês Competência", list(MESES_PT.values()), index=idx_mes, key="mes_rec")
