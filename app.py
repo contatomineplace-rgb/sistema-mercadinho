@@ -20,7 +20,6 @@ MESES_PT = {
     1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril", 5: "Maio", 6: "Junho",
     7: "Julho", 8: "Agosto", 9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"
 }
-# Inverte para facilitar busca (Nome -> Número)
 MESES_PT_INV = {v: k for k, v in MESES_PT.items()}
 
 # --- CONEXÃO COM O GOOGLE SHEETS ---
@@ -75,7 +74,6 @@ def salvar_lancamento(dados):
 
 def gerar_lista_anos():
     ano_atual = datetime.now().year
-    # Gera lista de 2025 até o ano atual + 2 anos
     return [str(ano) for ano in range(2025, ano_atual + 3)]
 
 # --- TELA DE LOGIN ---
@@ -111,8 +109,7 @@ if check_password():
     if menu == "Lançar Despesa":
         st.header("📉 Nova Despesa")
         
-        # Lógica para definir os valores padrões (Default)
-        # Padrão Inicial: Mês e Ano atuais
+        # 1. LÓGICA (Calcula os índices antes de desenhar)
         mes_atual_nome = MESES_PT[datetime.now().month]
         ano_atual_str = str(datetime.now().year)
         
@@ -120,33 +117,35 @@ if check_password():
         lista_anos = gerar_lista_anos()
         idx_ano = lista_anos.index(ano_atual_str) if ano_atual_str in lista_anos else 0
 
-        # Verifica se o usuário marcou a opção de repetir
-        usar_anterior = st.checkbox("Mesmo ano e mês de competência da despesa salva anteriormente?", 
-                                    key="check_repetir_comp",
-                                    disabled="memoria_mes" not in st.session_state) # Desabilita se não tiver memória
+        # Verifica se o checkbox (que será desenhado lá embaixo) está marcado no Session State
+        usar_anterior = st.session_state.get("check_repetir_comp", False)
         
         if usar_anterior and "memoria_mes" in st.session_state:
-            # Sobrescreve os índices com o que está na memória
             try:
                 idx_mes = list(MESES_PT.values()).index(st.session_state["memoria_mes"])
                 if st.session_state["memoria_ano"] in lista_anos:
                     idx_ano = lista_anos.index(st.session_state["memoria_ano"])
             except:
-                pass # Se der erro, mantem o atual
+                pass 
 
+        # 2. DESENHO DA TELA
         col1, col2 = st.columns(2)
         
         with col1:
             valor = st.number_input("Valor Total (R$)", min_value=0.01, format="%.2f", key="val_desp")
             data_liq = st.date_input("Data de Liquidação (Pagamento)", format="DD/MM/YYYY", key="data_liq_desp")
             
-            # --- NOVOS CAMPOS SEPARADOS ---
+            # Colunas Mês e Ano
             c_mes, c_ano = st.columns(2)
             with c_mes:
                 mes_selecionado = st.selectbox("Mês de Competência", list(MESES_PT.values()), index=idx_mes, key="sel_mes_comp")
             with c_ano:
                 ano_selecionado = st.selectbox("Ano de Competência", lista_anos, index=idx_ano, key="sel_ano_comp")
-            # ------------------------------
+            
+            # --- CHECKBOX AGORA ESTÁ AQUI EMBAIXO ---
+            st.checkbox("Mesmo ano e mês de competência da despesa salva anteriormente?", 
+                        key="check_repetir_comp",
+                        disabled="memoria_mes" not in st.session_state) 
 
             status = st.selectbox("Status", ["Pago", "A Pagar"], key="status_desp")
         
@@ -169,7 +168,6 @@ if check_password():
                 if usar_novo_fornecedor:
                     salvar_fornecedor_rapido(fornecedor)
                 
-                # Monta a data para o banco (YYYY-MM-01)
                 mes_num = MESES_PT_INV[mes_selecionado]
                 competencia_formatada = f"{ano_selecionado}-{mes_num:02d}"
 
@@ -187,14 +185,13 @@ if check_password():
                 salvar_lancamento(dados)
                 st.success("Despesa registrada com sucesso!")
                 
-                # --- SALVA NA MEMÓRIA ---
+                # Salva na memória
                 st.session_state["memoria_mes"] = mes_selecionado
                 st.session_state["memoria_ano"] = ano_selecionado
 
-                # --- LIMPEZA DOS CAMPOS ---
-                # Removemos as chaves (menos a memória)
+                # Limpeza (Mantém check_repetir_comp para o usuário decidir se desmarca ou não)
                 chaves_para_limpar = ["val_desp", "data_liq_desp", "status_desp", "sel_mes_comp", "sel_ano_comp",
-                                      "check_novo_forn", "txt_novo_forn", "sel_forn", "cat_desp", "obs_desp", "check_repetir_comp"]
+                                      "check_novo_forn", "txt_novo_forn", "sel_forn", "cat_desp", "obs_desp"]
                 for chave in chaves_para_limpar:
                     if chave in st.session_state:
                         del st.session_state[chave]
@@ -206,9 +203,7 @@ if check_password():
     elif menu == "Lançar Receita":
         st.header("📈 Nova Receita")
         
-        # Apliquei a mesma lógica de lista separada para Receita também
         mes_atual_nome = MESES_PT[datetime.now().month]
-        ano_atual_str = str(datetime.now().year)
         idx_mes = list(MESES_PT.values()).index(mes_atual_nome)
         lista_anos = gerar_lista_anos()
 
@@ -250,4 +245,88 @@ if check_password():
                 st.cache_data.clear()
                 st.rerun()
 
-    # ---
+    # --- ABA: RELATÓRIOS ---
+    elif menu == "Relatórios":
+        st.header("📊 Relatórios Gerenciais")
+        if st.button("🔄 Atualizar Dados"):
+            st.cache_data.clear()
+            st.rerun()
+
+        df = carregar_dados()
+        
+        if not df.empty:
+            df['valor'] = pd.to_numeric(df['valor'])
+            df['data_liquidacao'] = pd.to_datetime(df['data_liquidacao'])
+            
+            st.sidebar.markdown("---")
+            st.sidebar.subheader("Filtros")
+            
+            colunas_validas = df.columns.tolist()
+            filtro_comp = None
+            if 'competencia' in colunas_validas:
+                comps_unicas = sorted(df['competencia'].unique())
+                filtro_comp = st.sidebar.multiselect("Filtrar Competência (Ano-Mês)", comps_unicas)
+            
+            filtro_cat = None
+            if 'categoria' in colunas_validas:
+                filtro_cat = st.sidebar.multiselect("Filtrar Categoria", df['categoria'].unique())
+            
+            df_view = df.copy()
+            if filtro_comp:
+                df_view = df_view[df_view['competencia'].isin(filtro_comp)]
+            if filtro_cat:
+                df_view = df_view[df_view['categoria'].isin(filtro_cat)]
+
+            total_rec = df_view[df_view['tipo'] == 'Receita']['valor'].sum()
+            total_desp = df_view[df_view['tipo'] == 'Despesa']['valor'].sum()
+            saldo = total_rec - total_desp
+            
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Receitas", f"R$ {total_rec:,.2f}")
+            c2.metric("Despesas", f"R$ {total_desp:,.2f}", delta_color="inverse")
+            c3.metric("Resultado", f"R$ {saldo:,.2f}")
+
+            st.subheader("Despesas por Categoria")
+            df_despesas = df_view[df_view['tipo'] == 'Despesa']
+            if not df_despesas.empty:
+                st.bar_chart(df_despesas.groupby("categoria")["valor"].sum())
+
+            st.subheader("Extrato Detalhado")
+            st.dataframe(
+                df_view.sort_values("data_liquidacao", ascending=False), 
+                use_container_width=True,
+                column_config={
+                    "data_liquidacao": st.column_config.DateColumn("Data Liq.", format="DD/MM/YYYY")
+                }
+            )
+        else:
+            st.info("Nenhum dado lançado ainda.")
+
+    # --- ABA: CONFIGURAÇÕES ---
+    elif menu == "Configurações":
+        st.header("⚙️ Configurações")
+        
+        tab_fornecedores, tab_outros = st.tabs(["🏭 Fornecedores", "Outros"])
+        
+        with tab_fornecedores:
+            st.subheader("Gerenciar Fornecedores")
+            st.info("Edite os nomes, adicione CNPJs ou exclua linhas. Clique em 'Salvar Alterações' para confirmar.")
+            
+            df_fornecedores = carregar_fornecedores_df()
+            
+            df_editado = st.data_editor(
+                df_fornecedores,
+                num_rows="dynamic", 
+                column_config={
+                    "nome": st.column_config.TextColumn("Nome do Fornecedor", required=True),
+                    "cnpj": st.column_config.TextColumn("CNPJ (Opcional)")
+                },
+                use_container_width=True,
+                hide_index=True
+            )
+            
+            if st.button("💾 Salvar Alterações nos Fornecedores"):
+                salvar_tabela_fornecedores(df_editado)
+                st.success("Lista de fornecedores atualizada com sucesso!")
+                st.cache_data.clear()
+                st.rerun()
