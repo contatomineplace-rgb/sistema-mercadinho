@@ -24,24 +24,39 @@ def carregar_dados():
     except:
         return pd.DataFrame()
 
-def carregar_fornecedores():
+def carregar_fornecedores_df():
+    # Carrega a tabela completa de fornecedores para edição
     try:
         df = conn.read(worksheet="fornecedores", ttl=0)
-        return df['nome'].dropna().unique().tolist()
+        # Garante que as colunas existem mesmo se a planilha estiver vazia
+        if 'nome' not in df.columns:
+            df['nome'] = pd.Series(dtype='str')
+        if 'cnpj' not in df.columns:
+            df['cnpj'] = pd.Series(dtype='str')
+        return df
     except:
-        return []
+        return pd.DataFrame(columns=['nome', 'cnpj'])
 
-def salvar_fornecedor(novo_nome):
+def carregar_lista_nomes_fornecedores():
+    # Carrega apenas a lista de nomes para o dropdown
+    df = carregar_fornecedores_df()
+    return df['nome'].dropna().unique().tolist()
+
+def salvar_fornecedor_rapido(novo_nome):
+    # Usado na tela de Despesa (apenas nome)
     try:
-        df = conn.read(worksheet="fornecedores", ttl=0)
+        df = carregar_fornecedores_df()
         if novo_nome and novo_nome not in df['nome'].values:
-            novo_registro = pd.DataFrame([{"nome": novo_nome}])
+            novo_registro = pd.DataFrame([{"nome": novo_nome, "cnpj": ""}])
             df_atualizado = pd.concat([df, novo_registro], ignore_index=True)
             conn.update(worksheet="fornecedores", data=df_atualizado)
     except:
-        # Se falhar na leitura (tabela vazia), cria a primeira linha
-        novo_registro = pd.DataFrame([{"nome": novo_nome}])
+        novo_registro = pd.DataFrame([{"nome": novo_nome, "cnpj": ""}])
         conn.update(worksheet="fornecedores", data=novo_registro)
+
+def salvar_tabela_fornecedores(df_editado):
+    # Usado na tela de Configurações (salva tudo: edições, CNPJs e exclusões)
+    conn.update(worksheet="fornecedores", data=df_editado)
 
 def salvar_lancamento(dados):
     try:
@@ -50,7 +65,6 @@ def salvar_lancamento(dados):
         df_atualizado = pd.concat([df, novo_df], ignore_index=True)
         conn.update(worksheet="lancamentos", data=df_atualizado)
     except:
-        # Se falhar (tabela vazia), cria a primeira linha
         novo_df = pd.DataFrame([dados])
         conn.update(worksheet="lancamentos", data=novo_df)
 
@@ -81,13 +95,13 @@ def check_password():
 # --- INTERFACE PRINCIPAL ---
 if check_password():
     st.sidebar.title("Menu")
-    menu = st.sidebar.radio("Navegar", ["Lançar Despesa", "Lançar Receita", "Relatórios"])
+    # Adicionada a opção "Configurações" no menu
+    menu = st.sidebar.radio("Navegar", ["Lançar Despesa", "Lançar Receita", "Relatórios", "Configurações"])
 
     # --- ABA: LANÇAR DESPESA ---
     if menu == "Lançar Despesa":
         st.header("📉 Nova Despesa")
         
-        # AQUI FOI REMOVIDO O ST.FORM PARA O CHECKBOX FUNCIONAR
         col1, col2 = st.columns(2)
         
         with col1:
@@ -97,8 +111,7 @@ if check_password():
             status = st.selectbox("Status", ["Pago", "A Pagar"])
         
         with col2:
-            # Lógica de Fornecedor Dinâmica
-            lista_fornecedores = carregar_fornecedores()
+            lista_fornecedores = carregar_lista_nomes_fornecedores()
             usar_novo_fornecedor = st.checkbox("Cadastrar Novo Fornecedor?")
             
             if usar_novo_fornecedor:
@@ -114,7 +127,7 @@ if check_password():
                 st.warning("Preencha o fornecedor.")
             else:
                 if usar_novo_fornecedor:
-                    salvar_fornecedor(fornecedor)
+                    salvar_fornecedor_rapido(fornecedor)
                 
                 dados = {
                     "data_registro": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -129,7 +142,6 @@ if check_password():
                 }
                 salvar_lancamento(dados)
                 st.success("Despesa registrada com sucesso!")
-                # Pequena pausa para garantir que salvou antes de continuar
                 st.cache_data.clear()
 
     # --- ABA: LANÇAR RECEITA ---
@@ -173,7 +185,6 @@ if check_password():
             st.sidebar.markdown("---")
             st.sidebar.subheader("Filtros")
             
-            # Corrige erro caso a coluna não exista ainda
             colunas_validas = df.columns.tolist()
             filtro_comp = None
             if 'competencia' in colunas_validas:
@@ -207,3 +218,36 @@ if check_password():
             st.dataframe(df_view.sort_values("data_liquidacao", ascending=False), use_container_width=True)
         else:
             st.info("Nenhum dado lançado ainda.")
+
+    # --- ABA: CONFIGURAÇÕES (NOVA) ---
+    elif menu == "Configurações":
+        st.header("⚙️ Configurações")
+        
+        # Submenu interno usando abas
+        tab_fornecedores, tab_outros = st.tabs(["🏭 Fornecedores", "Outros"])
+        
+        with tab_fornecedores:
+            st.subheader("Gerenciar Fornecedores")
+            st.info("Edite os nomes, adicione CNPJs ou exclua linhas. Clique em 'Salvar Alterações' para confirmar.")
+            
+            # Carrega tabela
+            df_fornecedores = carregar_fornecedores_df()
+            
+            # Editor de Dados (Tabela Interativa)
+            # num_rows="dynamic" permite adicionar e excluir linhas
+            df_editado = st.data_editor(
+                df_fornecedores,
+                num_rows="dynamic", 
+                column_config={
+                    "nome": st.column_config.TextColumn("Nome do Fornecedor", required=True),
+                    "cnpj": st.column_config.TextColumn("CNPJ (Opcional)")
+                },
+                use_container_width=True,
+                hide_index=True
+            )
+            
+            if st.button("💾 Salvar Alterações nos Fornecedores"):
+                salvar_tabela_fornecedores(df_editado)
+                st.success("Lista de fornecedores atualizada com sucesso!")
+                st.cache_data.clear()
+                st.rerun()
