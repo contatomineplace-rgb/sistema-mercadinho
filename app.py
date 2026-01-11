@@ -135,9 +135,8 @@ def check_password():
         email = st.text_input("E-mail")
         password = st.text_input("Senha", type="password")
         if st.button("Entrar"):
-            # Ajuste conforme seu st.secrets
-            # Exemplo de uso local para teste: user_email = "admin"; user_pass = "1234"
             try:
+                # Ajuste conforme seu st.secrets
                 user_email = st.secrets["login"]["email"]
                 user_pass = st.secrets["login"]["senha"]
             except:
@@ -259,15 +258,25 @@ if check_password():
         # === 2. LANÇAMENTO EM LOTE (CORRIGIDO) ===
         with tab_lote:
             st.info("💡 **Dica:** Copie e cole do Excel. O valor será formatado automaticamente na tabela.")
+            
+            # Inicializa a chave de reset se não existir
+            if "lote_key_counter" not in st.session_state:
+                st.session_state["lote_key_counter"] = 0
+            
             lista_anos = gerar_lista_anos()
+            
             linhas_iniciais = [{
                 "valor": None, "data_liquidacao": None, "mes_competencia": None, "ano_competencia": None,
                 "fornecedor": "", "categoria": None, "observacao": "", "status": None
             } for _ in range(10)]
             df_template = pd.DataFrame(linhas_iniciais)
 
+            # Usa a chave dinâmica para forçar o reset da tabela
+            key_editor = f"editor_lote_{st.session_state['lote_key_counter']}"
+
             lote_editado = st.data_editor(
                 df_template,
+                key=key_editor, 
                 num_rows="dynamic",
                 use_container_width=True,
                 column_config={
@@ -275,6 +284,7 @@ if check_password():
                     "data_liquidacao": st.column_config.DateColumn("Data Pagamento", format="DD/MM/YYYY", required=True),
                     "mes_competencia": st.column_config.SelectboxColumn("Mês Comp.", options=list(MESES_PT.values()), required=True),
                     "ano_competencia": st.column_config.SelectboxColumn("Ano Comp.", options=lista_anos, required=True),
+                    # MODIFICADO: Voltamos para TextColumn para permitir digitação de NOVOS fornecedores
                     "fornecedor": st.column_config.TextColumn("Fornecedor (Digite)", required=True),
                     "categoria": st.column_config.SelectboxColumn("Classificação", options=CATEGORIAS, required=True),
                     "observacao": st.column_config.TextColumn("Observação"),
@@ -283,7 +293,7 @@ if check_password():
                 hide_index=True
             )
 
-            # --- CORREÇÃO APLICADA AQUI PARA EVITAR API LIMIT ---
+            # --- LÓGICA DE SALVAMENTO COM AUTO-CADASTRO ---
             if st.button("💾 Salvar Lote de Despesas"):
                 if lote_editado.empty:
                     st.warning("A tabela está vazia.")
@@ -309,6 +319,7 @@ if check_password():
                         
                         nome_forn = str(row['fornecedor']).strip()
                         
+                        # --- LÓGICA DE AUTO-CADASTRO DE FORNECEDOR ---
                         # Se é fornecedor novo, adiciona na lista temporária (NÃO SALVA AINDA)
                         if nome_forn and nome_forn.lower() not in nomes_forn_existentes:
                             novos_fornecedores_temp.append({
@@ -347,7 +358,10 @@ if check_password():
                             salvar_lote_lancamentos(pd.DataFrame(lista_dados_finais))
                             
                             st.success(f"{len(lista_dados_finais)} despesas salvas com sucesso!")
+                            
+                            # 4. Limpa e Reinicia
                             time.sleep(2)
+                            st.session_state["lote_key_counter"] += 1 
                             st.cache_data.clear()
                             st.rerun()
                             
