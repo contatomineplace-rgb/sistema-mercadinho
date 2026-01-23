@@ -94,6 +94,16 @@ def excluir_lancamentos(indices_para_excluir):
     except Exception as e:
         st.error(f"Erro ao excluir: {e}")
 
+def editar_lancamento(indice, novos_dados):
+    try:
+        df = conn.read(worksheet="lancamentos", ttl=0)
+        # Atualiza apenas a linha e colunas específicas
+        for chave, valor in novos_dados.items():
+            df.at[indice, chave] = valor
+        conn.update(worksheet="lancamentos", data=df)
+    except Exception as e:
+        st.error(f"Erro ao editar: {e}")
+
 def gerar_lista_anos():
     ano_atual = datetime.now().year
     return [str(ano) for ano in range(2025, ano_atual + 3)]
@@ -152,7 +162,7 @@ if check_password():
     # --- ABA: LANÇAR DESPESA ---
     if menu == "Lançar Despesa":
         st.header("📉 Gestão de Despesas")
-        tab_individual, tab_lote, tab_excluir = st.tabs(["📝 Individual", "📚 Despesa em Lote", "🗑️ Excluir Despesa"])
+        tab_individual, tab_lote, tab_editar_excluir = st.tabs(["📝 Individual", "📚 Despesa em Lote", "✏️ Editar ou Excluir Despesa"])
 
         # === 1. LANÇAMENTO INDIVIDUAL ===
         with tab_individual:
@@ -317,9 +327,9 @@ if check_password():
                     elif not lista_dados_finais and not erro_encontrado:
                         st.warning("Nenhuma linha preenchida para salvar.")
 
-        # === 3. EXCLUIR DESPESA ===
-        with tab_excluir:
-            st.subheader("🔍 Localizar e Excluir")
+        # === 3. EDITAR OU EXCLUIR DESPESA ===
+        with tab_editar_excluir:
+            st.subheader("🔍 Localizar, Editar ou Excluir")
             df_dados = carregar_dados()
             if not df_dados.empty:
                 df_dados['valor'] = pd.to_numeric(df_dados['valor'])
@@ -348,11 +358,11 @@ if check_password():
                 st.markdown(f"**Encontrados:** {len(df_filtrado)} registros.")
                 if not df_filtrado.empty:
                     df_filtrado_view = df_filtrado.copy()
-                    df_filtrado_view.insert(0, "Excluir?", False)
-                    editor_exclusao = st.data_editor(
+                    df_filtrado_view.insert(0, "Selecionar", False)
+                    editor_acao = st.data_editor(
                         df_filtrado_view,
                         column_config={
-                            "Excluir?": st.column_config.CheckboxColumn(required=True),
+                            "Selecionar": st.column_config.CheckboxColumn(required=True),
                             "data_liquidacao": st.column_config.DateColumn("Data Liq.", format="DD/MM/YYYY"),
                             "valor": st.column_config.NumberColumn("Valor", format="R$ %.2f")
                         },
@@ -360,16 +370,83 @@ if check_password():
                         hide_index=True,
                         use_container_width=True
                     )
-                    linhas_marcadas = editor_exclusao[editor_exclusao["Excluir?"] == True]
+                    
+                    linhas_marcadas = editor_acao[editor_acao["Selecionar"] == True]
+                    
                     if not linhas_marcadas.empty:
-                        st.error(f"Você selecionou {len(linhas_marcadas)} itens para exclusão.")
-                        if st.button("🗑️ CONFIRMAR EXCLUSÃO"):
-                            indices_para_deletar = linhas_marcadas.index.tolist()
-                            excluir_lancamentos(indices_para_deletar)
-                            st.success("Registros excluídos com sucesso!")
-                            time.sleep(2)
-                            st.cache_data.clear()
-                            st.rerun()
+                        indices_selecionados = linhas_marcadas.index.tolist()
+                        qtd_selecionada = len(indices_selecionados)
+                        
+                        st.markdown("---")
+                        col_btn1, col_btn2 = st.columns(2)
+                        
+                        # BOTÃO DE EXCLUSÃO
+                        with col_btn1:
+                            if st.button("🗑️ CONFIRMAR EXCLUSÃO", type="secondary", use_container_width=True):
+                                excluir_lancamentos(indices_selecionados)
+                                st.success(f"{qtd_selecionada} registro(s) excluído(s) com sucesso!")
+                                time.sleep(2)
+                                st.cache_data.clear()
+                                st.rerun()
+
+                        # BOTÃO DE EDIÇÃO
+                        with col_btn2:
+                            if qtd_selecionada == 1:
+                                if st.button("✏️ EDITAR DESPESA", type="primary", use_container_width=True):
+                                    st.session_state["editando_idx"] = indices_selecionados[0]
+                            elif qtd_selecionada > 1:
+                                st.warning("⚠️ Selecione apenas UMA despesa para editar.")
+
+                        # FORMULÁRIO DE EDIÇÃO
+                        if "editando_idx" in st.session_state and st.session_state["editando_idx"] in indices_selecionados:
+                            idx = st.session_state["editando_idx"]
+                            linha_atual = df_filtrado.loc[idx]
+                            
+                            st.markdown("### 📝 Editar Informações")
+                            with st.form(key=f"form_editar_{idx}"):
+                                c1, c2 = st.columns(2)
+                                with c1:
+                                    novo_valor = st.number_input("Valor (R$)", value=float(linha_atual['valor']), min_value=0.0)
+                                    nova_data = st.date_input("Data de Liquidação", value=pd.to_datetime(linha_atual['data_liquidacao']).date(), format="DD/MM/YYYY")
+                                    
+                                    ano_atual = linha_atual['competencia'][:4]
+                                    mes_atual_num = int(linha_atual['competencia'][5:])
+                                    mes_atual_nome = MESES_PT[mes_atual_num]
+                                    
+                                    novo_mes = st.selectbox("Mês de Competência", list(MESES_PT.values()), index=list(MESES_PT.values()).index(mes_atual_nome))
+                                    novo_ano = st.selectbox("Ano de Competência", gerar_lista_anos(), index=gerar_lista_anos().index(ano_atual))
+                                    novo_status = st.selectbox("Status", ["Pago", "A Pagar"], index=["Pago", "A Pagar"].index(linha_atual['status']))
+
+                                with c2:
+                                    lista_forn = carregar_lista_nomes_fornecedores()
+                                    idx_forn = lista_forn.index(linha_atual['fornecedor']) if linha_atual['fornecedor'] in lista_forn else 0
+                                    novo_fornecedor = st.selectbox("Fornecedor", lista_forn, index=idx_forn)
+                                    
+                                    idx_cat = CATEGORIAS.index(linha_atual['categoria']) if linha_atual['categoria'] in CATEGORIAS else 0
+                                    nova_categoria = st.selectbox("Categoria", CATEGORIAS, index=idx_cat)
+                                    nova_obs = st.text_area("Observação", value=linha_atual['observacao'])
+
+                                if st.form_submit_button("💾 Salvar Edição", type="primary", use_container_width=True):
+                                    mes_num = MESES_PT_INV[novo_mes]
+                                    nova_comp = f"{novo_ano}-{mes_num:02d}"
+                                    
+                                    dados_atualizados = {
+                                        "valor": novo_valor,
+                                        "fornecedor": novo_fornecedor,
+                                        "data_liquidacao": nova_data.strftime("%Y-%m-%d"),
+                                        "competencia": nova_comp,
+                                        "status": novo_status,
+                                        "categoria": nova_categoria,
+                                        "observacao": nova_obs
+                                    }
+                                    
+                                    editar_lancamento(idx, dados_atualizados)
+                                    st.success("Despesa atualizada com sucesso!")
+                                    del st.session_state["editando_idx"]
+                                    time.sleep(2)
+                                    st.cache_data.clear()
+                                    st.rerun()
+
                 else: st.info("Nenhuma despesa encontrada.")
             else: st.info("Não há dados cadastrados.")
 
