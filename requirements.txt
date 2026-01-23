@@ -1,4 +1,4 @@
 streamlit
 pandas
-streamlit-gsheets
-streamlit-cookies-controller
+st-gsheets-connection
+extra-streamlit-components
