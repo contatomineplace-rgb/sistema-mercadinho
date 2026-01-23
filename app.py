@@ -334,6 +334,9 @@ if check_password():
             if not df_dados.empty:
                 df_dados['valor'] = pd.to_numeric(df_dados['valor'])
                 df_dados['data_liquidacao'] = pd.to_datetime(df_dados['data_liquidacao'])
+                
+                # --- NOVOS FILTROS APLICADOS AQUI ---
+                # Linha 1 de Filtros (Ano, Mês e Valor)
                 col_f1, col_f2, col_f3 = st.columns(3)
                 with col_f1:
                     anos_disponiveis = sorted(df_dados['competencia'].str[:4].unique())
@@ -346,14 +349,27 @@ if check_password():
                         valor_min = float(df_dados['valor'].min())
                         valor_max = float(df_dados['valor'].max())
                         if valor_min == valor_max: valor_max += 1.0
-                        filtro_valor = st.slider("Faixa de Valor", valor_min, valor_max, (valor_min, valor_max))
+                        filtro_valor = st.slider("Faixa de Valor (R$)", valor_min, valor_max, (valor_min, valor_max))
                     else: filtro_valor = (0.0, 0.0)
 
+                # Linha 2 de Filtros (Fornecedor e Categoria)
+                col_f4, col_f5 = st.columns(2)
+                with col_f4:
+                    fornecedores_disponiveis = sorted(df_dados[df_dados['tipo'] == 'Despesa']['fornecedor'].dropna().unique())
+                    filtro_forn = st.multiselect("Filtrar por Fornecedor", fornecedores_disponiveis)
+                with col_f5:
+                    categorias_disponiveis = sorted(df_dados[df_dados['tipo'] == 'Despesa']['categoria'].dropna().unique())
+                    filtro_cat = st.multiselect("Filtrar por Categoria", categorias_disponiveis)
+
+                # Aplicação dos Filtros
                 df_filtrado = df_dados.copy()
+                df_filtrado = df_filtrado[df_filtrado['tipo'] == 'Despesa'] # Garantir que só mostre despesas
+                
                 if filtro_ano: df_filtrado = df_filtrado[df_filtrado['competencia'].str[:4].isin(filtro_ano)]
                 if filtro_mes: df_filtrado = df_filtrado[df_filtrado['competencia'].str[5:].isin(filtro_mes)]
                 df_filtrado = df_filtrado[(df_filtrado['valor'] >= filtro_valor[0]) & (df_filtrado['valor'] <= filtro_valor[1])]
-                df_filtrado = df_filtrado[df_filtrado['tipo'] == 'Despesa']
+                if filtro_forn: df_filtrado = df_filtrado[df_filtrado['fornecedor'].isin(filtro_forn)]
+                if filtro_cat: df_filtrado = df_filtrado[df_filtrado['categoria'].isin(filtro_cat)]
 
                 st.markdown(f"**Encontrados:** {len(df_filtrado)} registros.")
                 if not df_filtrado.empty:
