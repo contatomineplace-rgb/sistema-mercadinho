@@ -135,14 +135,8 @@ def check_password():
         email = st.text_input("E-mail")
         password = st.text_input("Senha", type="password")
         if st.button("Entrar"):
-            try:
-                # Ajuste conforme seu st.secrets
-                user_email = st.secrets["login"]["email"]
-                user_pass = st.secrets["login"]["senha"]
-            except:
-                st.error("Secrets não configurados corretamente.")
-                return False
-            
+            user_email = st.secrets["login"]["email"]
+            user_pass = st.secrets["login"]["senha"]
             if email == user_email and password == user_pass:
                 st.session_state["password_correct"] = True
                 st.rerun()
@@ -255,28 +249,18 @@ if check_password():
                     st.cache_data.clear()
                     st.rerun()
 
-        # === 2. LANÇAMENTO EM LOTE (CORRIGIDO) ===
+        # === 2. LANÇAMENTO EM LOTE ===
         with tab_lote:
             st.info("💡 **Dica:** Copie e cole do Excel. O valor será formatado automaticamente na tabela.")
-            
-            # Inicializa a chave de reset se não existir
-            if "lote_key_counter" not in st.session_state:
-                st.session_state["lote_key_counter"] = 0
-            
             lista_anos = gerar_lista_anos()
-            
             linhas_iniciais = [{
                 "valor": None, "data_liquidacao": None, "mes_competencia": None, "ano_competencia": None,
                 "fornecedor": "", "categoria": None, "observacao": "", "status": None
             } for _ in range(10)]
             df_template = pd.DataFrame(linhas_iniciais)
 
-            # Usa a chave dinâmica para forçar o reset da tabela
-            key_editor = f"editor_lote_{st.session_state['lote_key_counter']}"
-
             lote_editado = st.data_editor(
                 df_template,
-                key=key_editor, 
                 num_rows="dynamic",
                 use_container_width=True,
                 column_config={
@@ -284,7 +268,6 @@ if check_password():
                     "data_liquidacao": st.column_config.DateColumn("Data Pagamento", format="DD/MM/YYYY", required=True),
                     "mes_competencia": st.column_config.SelectboxColumn("Mês Comp.", options=list(MESES_PT.values()), required=True),
                     "ano_competencia": st.column_config.SelectboxColumn("Ano Comp.", options=lista_anos, required=True),
-                    # MODIFICADO: Voltamos para TextColumn para permitir digitação de NOVOS fornecedores
                     "fornecedor": st.column_config.TextColumn("Fornecedor (Digite)", required=True),
                     "categoria": st.column_config.SelectboxColumn("Classificação", options=CATEGORIAS, required=True),
                     "observacao": st.column_config.TextColumn("Observação"),
@@ -293,44 +276,26 @@ if check_password():
                 hide_index=True
             )
 
-            # --- LÓGICA DE SALVAMENTO COM AUTO-CADASTRO ---
             if st.button("💾 Salvar Lote de Despesas"):
                 if lote_editado.empty:
                     st.warning("A tabela está vazia.")
                 else:
-                    # 1. Carrega fornecedores atuais uma única vez
                     df_forn_atual = carregar_fornecedores_df()
                     nomes_forn_existentes = set(df_forn_atual['nome'].str.lower().values)
-                    
                     lista_dados_finais = []
-                    novos_fornecedores_temp = [] # Lista temporária para novos fornecedores
                     erro_encontrado = False
-
-                    # 2. Processa cada linha na memória
                     for index, row in lote_editado.iterrows():
-                        # Pula linhas vazias
                         if not row['fornecedor'] and pd.isna(row['valor']): continue
-                        
-                        # Validação básica
                         if not row['fornecedor'] or pd.isna(row['valor']) or pd.isna(row['data_liquidacao']) or not row['mes_competencia'] or not row['ano_competencia']:
                             st.warning(f"Linha {index + 1} incompleta. Verifique Valor, Data, Competência e Fornecedor.")
                             erro_encontrado = True
                             continue
-                        
                         nome_forn = str(row['fornecedor']).strip()
-                        
-                        # --- LÓGICA DE AUTO-CADASTRO DE FORNECEDOR ---
-                        # Se é fornecedor novo, adiciona na lista temporária (NÃO SALVA AINDA)
-                        if nome_forn and nome_forn.lower() not in nomes_forn_existentes:
-                            novos_fornecedores_temp.append({
-                                "nome": nome_forn, "cnpj": "", "telefone": "", "login_app": "", "senha_app": ""
-                            })
-                            # Adiciona ao set local para evitar duplicatas dentro do próprio lote
-                            nomes_forn_existentes.add(nome_forn.lower())
-
+                        if nome_forn.lower() not in nomes_forn_existentes:
+                            salvar_fornecedor_rapido(nome_forn)
+                            nomes_forn_existentes.add(nome_forn.lower()) 
                         mes_num = MESES_PT_INV[row['mes_competencia']]
                         comp_fmt = f"{row['ano_competencia']}-{mes_num:02d}"
-                        
                         dados_linha = {
                             "data_registro": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             "tipo": "Despesa",
@@ -343,33 +308,14 @@ if check_password():
                             "observacao": row['observacao']
                         }
                         lista_dados_finais.append(dados_linha)
-
-                    # 3. Executa as gravações no banco (apenas se tudo estiver validado)
                     if lista_dados_finais and not erro_encontrado:
-                        try:
-                            # A. Salva NOVOS FORNECEDORES em lote (1 única chamada API)
-                            if novos_fornecedores_temp:
-                                df_novos_forn = pd.DataFrame(novos_fornecedores_temp)
-                                df_final_fornecedores = pd.concat([df_forn_atual, df_novos_forn], ignore_index=True)
-                                salvar_tabela_fornecedores(df_final_fornecedores)
-                                st.toast(f"{len(novos_fornecedores_temp)} novos fornecedores cadastrados!", icon="🆕")
-                            
-                            # B. Salva DESPESAS em lote (1 única chamada API)
-                            salvar_lote_lancamentos(pd.DataFrame(lista_dados_finais))
-                            
-                            st.success(f"{len(lista_dados_finais)} despesas salvas com sucesso!")
-                            
-                            # 4. Limpa e Reinicia
-                            time.sleep(2)
-                            st.session_state["lote_key_counter"] += 1 
-                            st.cache_data.clear()
-                            st.rerun()
-                            
-                        except Exception as e:
-                            st.error(f"Erro ao comunicar com Google Sheets: {e}")
-                            
+                        salvar_lote_lancamentos(pd.DataFrame(lista_dados_finais))
+                        st.success(f"{len(lista_dados_finais)} despesas salvas com sucesso!")
+                        time.sleep(2)
+                        st.cache_data.clear()
+                        st.rerun()
                     elif not lista_dados_finais and not erro_encontrado:
-                        st.warning("Nenhuma linha válida para salvar.")
+                        st.warning("Nenhuma linha preenchida para salvar.")
 
         # === 3. EXCLUIR DESPESA ===
         with tab_excluir:
