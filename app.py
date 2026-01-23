@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import time
+import hashlib
 from datetime import datetime, date
 from streamlit_gsheets import GSheetsConnection
 
@@ -133,12 +134,28 @@ def atualizar_data_liq():
     if st.session_state.get("check_repetir_data") and "memoria_data_liq" in st.session_state:
         st.session_state["data_liq_desp"] = st.session_state["memoria_data_liq"]
 
-# --- TELA DE LOGIN ---
+# --- FUNÇÕES DE AUTENTICAÇÃO E LOGIN ---
+def gerar_token_auth():
+    """Gera um token seguro baseado nas credenciais do arquivo secrets"""
+    email_secreto = st.secrets["login"]["email"]
+    senha_secreta = st.secrets["login"]["senha"]
+    # Cria um hash SHA-256 combinando email, senha e um texto base para segurança
+    texto_base = email_secreto + senha_secreta + "mercadinho_seguro_2026"
+    return hashlib.sha256(texto_base.encode()).hexdigest()
+
 def check_password():
-    if "password_correct" not in st.session_state:
-        st.session_state["password_correct"] = False
-    if st.session_state["password_correct"]:
+    token_esperado = gerar_token_auth()
+
+    # 1. Verifica se já está logado na sessão atual
+    if st.session_state.get("password_correct", False):
         return True
+
+    # 2. Verifica se a URL contém o token correto (sobrevive ao F5/Refresh)
+    if st.query_params.get("auth") == token_esperado:
+        st.session_state["password_correct"] = True
+        return True
+
+    # 3. Se não estiver logado, exibe a tela de login
     st.markdown("## 🔐 Acesso Restrito")
     col1, col2 = st.columns([1, 2])
     with col1:
@@ -149,6 +166,8 @@ def check_password():
             user_pass = st.secrets["login"]["senha"]
             if email == user_email and password == user_pass:
                 st.session_state["password_correct"] = True
+                # Salva o token na URL para que o login persista após o refresh
+                st.query_params["auth"] = token_esperado
                 st.rerun()
             else:
                 st.error("Dados incorretos.")
@@ -335,7 +354,6 @@ if check_password():
                 df_dados['valor'] = pd.to_numeric(df_dados['valor'])
                 df_dados['data_liquidacao'] = pd.to_datetime(df_dados['data_liquidacao'])
                 
-                # --- NOVOS FILTROS APLICADOS AQUI ---
                 # Linha 1 de Filtros (Ano, Mês e Valor)
                 col_f1, col_f2, col_f3 = st.columns(3)
                 with col_f1:
