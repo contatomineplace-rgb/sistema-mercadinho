@@ -176,7 +176,8 @@ def check_password():
 # --- INTERFACE PRINCIPAL ---
 if check_password():
     st.sidebar.title("Menu")
-    menu = st.sidebar.radio("Navegar", ["Lançar Despesa", "Lançar Receita", "Relatórios", "Configurações"])
+    # MENU ATUALIZADO COM A CONCILIAÇÃO BANCÁRIA
+    menu = st.sidebar.radio("Navegar", ["Lançar Despesa", "Lançar Receita", "Relatórios", "Conciliação Bancária", "Configurações"])
 
     # --- ABA: LANÇAR DESPESA ---
     if menu == "Lançar Despesa":
@@ -600,6 +601,103 @@ if check_password():
             )
         else:
             st.info("Nenhum dado lançado ainda.")
+
+    # --- ABA: CONCILIAÇÃO BANCÁRIA (SICREDI) ---
+    elif menu == "Conciliação Bancária":
+        st.header("🏦 Conciliação Bancária (Sicredi)")
+        
+        st.markdown("""
+        **Como funciona:**
+        1. Exporte o extrato da sua conta Sicredi em formato **Excel (XLS/XLSX)** ou **CSV**.
+        2. Faça o upload do arquivo abaixo.
+        3. O sistema comparará os débitos do extrato com as despesas lançadas no sistema (mesma data e valor).
+        """)
+
+        arquivo_extrato = st.file_uploader("📥 Envie o extrato do Sicredi", type=["csv", "xls", "xlsx"])
+
+        if arquivo_extrato is not None:
+            try:
+                # 1. Leitura do Extrato Bancário
+                if arquivo_extrato.name.endswith('csv'):
+                    df_extrato = pd.read_csv(arquivo_extrato, sep=';', encoding='latin1') # Padrão comum de bancos BR
+                else:
+                    df_extrato = pd.read_excel(arquivo_extrato)
+
+                st.success("Extrato carregado com sucesso! Mapeie as colunas abaixo se necessário:")
+
+                # 2. Mapeamento de Colunas (Flexibilidade para o formato do Sicredi)
+                col1, col2, col3 = st.columns(3)
+                colunas_extrato = list(df_extrato.columns)
+                
+                # Tenta adivinhar as colunas padrão do Sicredi
+                idx_data = colunas_extrato.index('Data') if 'Data' in colunas_extrato else 0
+                idx_hist = colunas_extrato.index('Histórico') if 'Histórico' in colunas_extrato else 0
+                idx_valor = colunas_extrato.index('Valor') if 'Valor' in colunas_extrato else 0
+
+                with col1: col_data = st.selectbox("Coluna de Data", colunas_extrato, index=idx_data)
+                with col2: col_hist = st.selectbox("Coluna de Histórico/Descrição", colunas_extrato, index=idx_hist)
+                with col3: col_valor = st.selectbox("Coluna de Valor", colunas_extrato, index=idx_valor)
+
+                if st.button("🔍 Iniciar Conciliação", type="primary"):
+                    with st.spinner("Comparando lançamentos..."):
+                        # Preparar dados do Extrato
+                        df_ext = df_extrato[[col_data, col_hist, col_valor]].copy()
+                        df_ext.columns = ['Data', 'Historico', 'Valor']
+                        df_ext['Data'] = pd.to_datetime(df_ext['Data'], dayfirst=True).dt.date
+                        df_ext['Valor'] = pd.to_numeric(df_ext['Valor'].astype(str).str.replace(',', '.'), errors='coerce')
+                        
+                        # Filtrar apenas saídas (despesas) no extrato (valores negativos)
+                        df_ext_saidas = df_ext[df_ext['Valor'] < 0].copy()
+                        # Converter para positivo para comparar com o sistema
+                        df_ext_saidas['Valor_Absoluto'] = df_ext_saidas['Valor'].abs() 
+
+                        # Preparar dados do Sistema
+                        df_sistema = carregar_dados()
+                        df_sistema = df_sistema[df_sistema['tipo'] == 'Despesa'].copy()
+                        df_sistema['data_liquidacao'] = pd.to_datetime(df_sistema['data_liquidacao']).dt.date
+                        df_sistema['valor'] = pd.to_numeric(df_sistema['valor'])
+
+                        # 3. Cruzamento de Dados (Merge)
+                        # Arredondando valores para evitar erro de float (centavos)
+                        df_ext_saidas['Valor_Round'] = df_ext_saidas['Valor_Absoluto'].round(2)
+                        df_sistema['Valor_Round'] = df_sistema['valor'].round(2)
+
+                        # Merge usando Data e Valor
+                        conciliacao = pd.merge(
+                            df_ext_saidas, 
+                            df_sistema, 
+                            left_on=['Data', 'Valor_Round'], 
+                            right_on=['data_liquidacao', 'Valor_Round'], 
+                            how='left', 
+                            indicator=True
+                        )
+
+                        # 4. Resultados
+                        df_nao_encontrados = conciliacao[conciliacao['_merge'] == 'left_only']
+                        df_conciliados = conciliacao[conciliacao['_merge'] == 'both']
+
+                        st.markdown("---")
+                        c1, c2 = st.columns(2)
+                        c1.metric("✅ Despesas Encontradas (Conciliadas)", len(df_conciliados))
+                        c2.metric("⚠️ Despesas NÃO Lançadas no Sistema", len(df_nao_encontrados))
+
+                        tab_pendentes, tab_ok = st.tabs(["🔴 Pendentes de Lançamento", "🟢 Já Conciliados"])
+
+                        with tab_pendentes:
+                            if not df_nao_encontrados.empty:
+                                st.warning("As seguintes despesas constam no extrato do Sicredi, mas não foram achadas no seu sistema:")
+                                # Limpar dataframe para exibição
+                                view_pendentes = df_nao_encontrados[['Data', 'Historico', 'Valor_Absoluto']].copy()
+                                view_pendentes.columns = ['Data Extrato', 'Descrição do Banco', 'Valor (R$)']
+                                st.dataframe(view_pendentes, use_container_width=True)
+                            else:
+                                st.success("Parabéns! Todas as despesas do extrato estão lançadas no sistema.")
+
+                        with tab_ok:
+                            st.dataframe(df_conciliados[['Data', 'Historico', 'Valor_Absoluto', 'fornecedor', 'categoria']], use_container_width=True)
+
+            except Exception as e:
+                st.error(f"Erro ao processar o arquivo: {e}")
 
     # --- ABA: CONFIGURAÇÕES ---
     elif menu == "Configurações":
