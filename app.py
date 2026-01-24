@@ -707,8 +707,23 @@ if check_password():
                             else:
                                 st.success("Parabéns! Todas as despesas do extrato estão lançadas no sistema.")
 
+                        # --- NOVA VISUALIZAÇÃO LADO A LADO ---
                         with tab_ok:
-                            st.dataframe(df_conciliados[['Data', 'Historico', 'Valor_Absoluto', 'fornecedor', 'categoria']], use_container_width=True)
+                            if not df_conciliados.empty:
+                                view_ok = df_conciliados[['Data', 'Historico', 'Valor_Absoluto', 'fornecedor', 'categoria', 'valor']].copy()
+                                view_ok.columns = ['Data (Banco)', 'Histórico (Banco)', 'Valor (Banco)', 'Fornecedor (Sistema)', 'Categoria (Sistema)', 'Valor (Sistema)']
+                                
+                                st.dataframe(
+                                    view_ok, 
+                                    use_container_width=True,
+                                    column_config={
+                                        "Valor (Banco)": st.column_config.NumberColumn("Valor (Banco)", format="R$ %.2f"),
+                                        "Valor (Sistema)": st.column_config.NumberColumn("Valor (Sistema)", format="R$ %.2f")
+                                    },
+                                    hide_index=True
+                                )
+                            else:
+                                st.info("Nenhum lançamento foi conciliado ainda.")
 
             except Exception as e:
                 st.error(f"Erro ao processar o arquivo. Verifique se o arquivo está corrompido ou protegido. Detalhe do erro: {e}")
