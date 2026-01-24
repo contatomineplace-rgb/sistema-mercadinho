@@ -1,7 +1,3 @@
 streamlit
 pandas
-numpy
-streamlit-gsheets
-gspread
-openpyxl
-xlrd==2.0.1
+st-gsheets-connection
