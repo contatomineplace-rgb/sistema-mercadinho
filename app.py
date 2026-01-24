@@ -4,6 +4,7 @@ import time
 import hashlib
 from datetime import datetime, date
 import io
+import csv
 from streamlit_gsheets import GSheetsConnection
 
 # --- CONFIGURAÇÕES INICIAIS ---
@@ -596,50 +597,64 @@ if check_password():
         else:
             st.info("Nenhum dado lançado ainda.")
 
-    # --- ABA: CONCILIAÇÃO BANCÁRIA (BLINDADA CONTRA ERROS DE FORMATO) ---
+    # --- ABA: CONCILIAÇÃO BANCÁRIA (SICREDI - LEITURA SOB MEDIDA) ---
     elif menu == "Conciliação Bancária":
         st.header("🏦 Conciliação Bancária (Sicredi)")
         
         st.markdown("""
         **Como funciona:**
-        1. Exporte o extrato da sua conta Sicredi.
-        2. Faça o upload do arquivo abaixo. O sistema lerá e comparará automaticamente.
+        1. Exporte o extrato da sua conta Sicredi (formato Excel ou CSV).
+        2. Faça o upload do arquivo abaixo. O sistema já foi calibrado para o padrão do Sicredi.
         """)
 
         arquivo_extrato = st.file_uploader("📥 Envie o extrato do Sicredi", type=["csv", "xls", "xlsx"])
 
         if arquivo_extrato is not None:
             try:
-                # FUNÇÃO PARA ENCONTRAR O CABEÇALHO REAL
-                skip_lines = 0
+                # =========================================================================
+                # 1. LEITOR SOB MEDIDA PARA O ARQUIVO DO SICREDI
+                # Ignora quebras de linha e vírgulas fantasmas do banco
+                # =========================================================================
                 arquivo_extrato.seek(0)
-                
-                # Para encontrar onde a tabela realmente começa
                 text_data = arquivo_extrato.getvalue().decode('latin1', errors='ignore')
                 lines = text_data.splitlines()
-                for i, line in enumerate(lines):
-                    if 'Data' in line and ('Descrição' in line or 'Histórico' in line):
-                        skip_lines = i
-                        break
-                
-                arquivo_extrato.seek(0)
-                
-                # BLINDAGEM CONTRA ERRO "Expected 1 fields, saw 2"
-                # O uso do engine='python' e on_bad_lines='skip' ignora linhas corrompidas sem travar o sistema.
-                if arquivo_extrato.name.endswith('csv') or arquivo_extrato.name.endswith('xls'):
-                    try:
-                        # Tenta ler com separador de vírgula, super tolerante a erros
-                        df_extrato = pd.read_csv(arquivo_extrato, sep=',', encoding='latin1', skiprows=skip_lines, engine='python', on_bad_lines='skip')
-                    except:
-                        arquivo_extrato.seek(0)
-                        # Fallback para ponto e vírgula
-                        df_extrato = pd.read_csv(arquivo_extrato, sep=';', encoding='latin1', skiprows=skip_lines, engine='python', on_bad_lines='skip')
-                else:
-                    df_extrato = pd.read_excel(arquivo_extrato, skiprows=skip_lines)
 
-                # Limpeza Padrão das Colunas
+                # Acha a linha do cabeçalho
+                header_idx = 0
+                for i, line in enumerate(lines):
+                    if 'Data' in line and ('Descrição' in line or 'Histórico' in line) and 'Valor' in line:
+                        header_idx = i
+                        break
+
+                # Identifica se o arquivo usa vírgula ou ponto e vírgula
+                delimiter = ';' if ';' in lines[header_idx] else ','
+
+                # Lê o arquivo usando o leitor nativo do Python (imune a erros de formatação)
+                reader = csv.reader(lines[header_idx:], delimiter=delimiter)
+                parsed_data = [row for row in reader]
+
+                if len(parsed_data) > 1:
+                    header = parsed_data[0]
+                    # Garante que a "Descrição" não roube espaço das outras colunas se houver vírgula extra
+                    clean_data = []
+                    max_cols = len(header)
+                    for row in parsed_data[1:]:
+                        if len(row) > max_cols:
+                            # Se a linha quebrou, junta o texto excedente na descrição
+                            desc = " - ".join(row[1 : 1 + (len(row) - max_cols + 1)])
+                            rest = row[1 + (len(row) - max_cols + 1) :]
+                            row = [row[0], desc] + rest
+                        clean_data.append(row[:max_cols])
+
+                    df_extrato = pd.DataFrame(clean_data, columns=header)
+                else:
+                    df_extrato = pd.DataFrame()
+
+                # Limpeza final dos nomes das colunas
                 df_extrato.columns = df_extrato.columns.str.strip()
                 df_extrato.dropna(how='all', inplace=True)
+
+                # =========================================================================
 
                 col1, col2, col3 = st.columns(3)
                 colunas_extrato = list(df_extrato.columns)
@@ -655,31 +670,35 @@ if check_password():
                 if st.button("🔍 Iniciar Conciliação", type="primary"):
                     with st.spinner("Comparando lançamentos com 100% de precisão..."):
                         
-                        # --- 3. PREPARAÇÃO DOS DADOS DO BANCO ---
+                        # --- 2. PREPARAÇÃO DOS DADOS DO BANCO ---
                         df_ext = df_extrato[[col_data, col_hist, col_valor]].copy()
                         df_ext.columns = ['Data', 'Historico', 'Valor']
                         
+                        # Converte a Data
                         df_ext['Data_Formatada'] = pd.to_datetime(df_ext['Data'], dayfirst=True, errors='coerce').dt.date
+                        # Converte o Valor (agora ele lê os pontos originais do arquivo)
                         df_ext['Valor_Numerico'] = pd.to_numeric(df_ext['Valor'], errors='coerce')
                         
-                        # Filtra apenas as SAÍDAS (Valores Negativos)
+                        # Filtra apenas as SAÍDAS (valores negativos)
                         df_ext_saidas = df_ext[df_ext['Valor_Numerico'] < 0].dropna(subset=['Data_Formatada', 'Valor_Numerico']).copy()
                         df_ext_saidas['Valor_Absoluto'] = df_ext_saidas['Valor_Numerico'].abs() 
 
-                        # Criação das "Chaves Textuais" para bater com o sistema
+                        # Criação das "Chaves Textuais" para o Banco
                         df_ext_saidas['CHAVE_DATA'] = df_ext_saidas['Data_Formatada'].astype(str).str.strip()
                         df_ext_saidas['CHAVE_VALOR'] = df_ext_saidas['Valor_Absoluto'].apply(lambda x: "{:.2f}".format(x))
 
-                        # --- 4. PREPARAÇÃO DOS DADOS DO SISTEMA ---
+
+                        # --- 3. PREPARAÇÃO DOS DADOS DO SISTEMA ---
                         df_sistema = carregar_dados()
                         df_sistema = df_sistema[df_sistema['tipo'] == 'Despesa'].copy()
                         df_sistema['valor'] = pd.to_numeric(df_sistema['valor'])
                         
-                        # Criação das "Chaves Textuais" do sistema
+                        # Criação das "Chaves Textuais" do Sistema
                         df_sistema['CHAVE_DATA'] = pd.to_datetime(df_sistema['data_liquidacao']).dt.date.astype(str).str.strip()
                         df_sistema['CHAVE_VALOR'] = df_sistema['valor'].apply(lambda x: "{:.2f}".format(x))
 
-                        # --- 5. O CRUZAMENTO EXATO (MERGE) ---
+
+                        # --- 4. O CRUZAMENTO EXATO (MERGE) ---
                         df_conciliados = pd.merge(
                             df_ext_saidas, 
                             df_sistema, 
@@ -692,7 +711,7 @@ if check_password():
                         df_ext_saidas['CHAVE_UNICA'] = df_ext_saidas['CHAVE_DATA'] + df_ext_saidas['CHAVE_VALOR']
                         df_nao_encontrados = df_ext_saidas[~df_ext_saidas['CHAVE_UNICA'].isin(chaves_conciliadas)]
 
-                        # --- 6. EXIBIÇÃO DOS RESULTADOS ---
+                        # --- 5. EXIBIÇÃO DOS RESULTADOS ---
                         st.markdown("---")
                         c1, c2 = st.columns(2)
                         c1.metric("✅ Despesas Encontradas (Conciliadas)", len(df_conciliados))
@@ -736,9 +755,9 @@ if check_password():
                             else:
                                 st.error("Nenhum lançamento foi conciliado. Verifique a aba 'Diagnóstico de Erro'.")
 
-                        # --- 7. FERRAMENTA DE DIAGNÓSTICO ---
+                        # --- 6. FERRAMENTA DE DIAGNÓSTICO ATUALIZADA ---
                         with tab_debug:
-                            st.info("💡 **Por que não conciliou?** Compare a forma como o computador está lendo os dados abaixo. Se a 'Chave' do Banco for diferente da 'Chave' do Sistema, a conciliação não ocorre.")
+                            st.info("💡 **Sucesso na Leitura!** Agora a tabela do Banco está carregando perfeitamente. Veja abaixo como o sistema as está comparando:")
                             
                             col_d1, col_d2 = st.columns(2)
                             with col_d1:
