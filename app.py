@@ -3,6 +3,7 @@ import pandas as pd
 import time
 import hashlib
 from datetime import datetime, date
+import io
 from streamlit_gsheets import GSheetsConnection
 
 # --- CONFIGURAÇÕES INICIAIS ---
@@ -176,7 +177,6 @@ def check_password():
 # --- INTERFACE PRINCIPAL ---
 if check_password():
     st.sidebar.title("Menu")
-    # MENU ATUALIZADO COM A CONCILIAÇÃO BANCÁRIA
     menu = st.sidebar.radio("Navegar", ["Lançar Despesa", "Lançar Receita", "Relatórios", "Conciliação Bancária", "Configurações"])
 
     # --- ABA: LANÇAR DESPESA ---
@@ -355,7 +355,6 @@ if check_password():
                 df_dados['valor'] = pd.to_numeric(df_dados['valor'])
                 df_dados['data_liquidacao'] = pd.to_datetime(df_dados['data_liquidacao'])
                 
-                # Linha 1 de Filtros (Ano, Mês e Valor)
                 col_f1, col_f2, col_f3 = st.columns(3)
                 with col_f1:
                     anos_disponiveis = sorted(df_dados['competencia'].str[:4].unique())
@@ -371,7 +370,6 @@ if check_password():
                         filtro_valor = st.slider("Faixa de Valor (R$)", valor_min, valor_max, (valor_min, valor_max))
                     else: filtro_valor = (0.0, 0.0)
 
-                # Linha 2 de Filtros (Fornecedor e Categoria)
                 col_f4, col_f5 = st.columns(2)
                 with col_f4:
                     fornecedores_disponiveis = sorted(df_dados[df_dados['tipo'] == 'Despesa']['fornecedor'].dropna().unique())
@@ -380,9 +378,8 @@ if check_password():
                     categorias_disponiveis = sorted(df_dados[df_dados['tipo'] == 'Despesa']['categoria'].dropna().unique())
                     filtro_cat = st.multiselect("Filtrar por Categoria", categorias_disponiveis)
 
-                # Aplicação dos Filtros
                 df_filtrado = df_dados.copy()
-                df_filtrado = df_filtrado[df_filtrado['tipo'] == 'Despesa'] # Garantir que só mostre despesas
+                df_filtrado = df_filtrado[df_filtrado['tipo'] == 'Despesa']
                 
                 if filtro_ano: df_filtrado = df_filtrado[df_filtrado['competencia'].str[:4].isin(filtro_ano)]
                 if filtro_mes: df_filtrado = df_filtrado[df_filtrado['competencia'].str[5:].isin(filtro_mes)]
@@ -415,7 +412,6 @@ if check_password():
                         st.markdown("---")
                         col_btn1, col_btn2 = st.columns(2)
                         
-                        # BOTÃO DE EXCLUSÃO
                         with col_btn1:
                             if st.button("🗑️ CONFIRMAR EXCLUSÃO", type="secondary", use_container_width=True):
                                 excluir_lancamentos(indices_selecionados)
@@ -424,7 +420,6 @@ if check_password():
                                 st.cache_data.clear()
                                 st.rerun()
 
-                        # BOTÃO DE EDIÇÃO
                         with col_btn2:
                             if qtd_selecionada == 1:
                                 if st.button("✏️ EDITAR DESPESA", type="primary", use_container_width=True):
@@ -432,7 +427,6 @@ if check_password():
                             elif qtd_selecionada > 1:
                                 st.warning("⚠️ Selecione apenas UMA despesa para editar.")
 
-                        # FORMULÁRIO DE EDIÇÃO
                         if "editando_idx" in st.session_state and st.session_state["editando_idx"] in indices_selecionados:
                             idx = st.session_state["editando_idx"]
                             linha_atual = df_filtrado.loc[idx]
@@ -602,34 +596,51 @@ if check_password():
         else:
             st.info("Nenhum dado lançado ainda.")
 
-    # --- ABA: CONCILIAÇÃO BANCÁRIA (SICREDI) ---
+    # --- ABA: CONCILIAÇÃO BANCÁRIA (SICREDI - ROBUSTO) ---
     elif menu == "Conciliação Bancária":
         st.header("🏦 Conciliação Bancária (Sicredi)")
         
         st.markdown("""
         **Como funciona:**
         1. Exporte o extrato da sua conta Sicredi em formato **Excel (XLS/XLSX)** ou **CSV**.
-        2. Faça o upload do arquivo abaixo.
-        3. O sistema comparará os débitos do extrato com as despesas lançadas no sistema (mesma data e valor).
+        2. Faça o upload do arquivo abaixo. O sistema ignorará o cabeçalho do banco automaticamente.
         """)
 
         arquivo_extrato = st.file_uploader("📥 Envie o extrato do Sicredi", type=["csv", "xls", "xlsx"])
 
         if arquivo_extrato is not None:
             try:
-                # 1. Leitura do Extrato Bancário
+                # FUNÇÃO PARA ENCONTRAR O CABEÇALHO REAL (Ignorando informações da conta)
+                skip_lines = 0
+                arquivo_extrato.seek(0)
+                
                 if arquivo_extrato.name.endswith('csv'):
-                    df_extrato = pd.read_csv(arquivo_extrato, sep=';', encoding='latin1') # Padrão comum de bancos BR
+                    # Lê como texto para encontrar a linha "Data"
+                    text_data = arquivo_extrato.getvalue().decode('latin1', errors='ignore')
+                    lines = text_data.splitlines()
+                    for i, line in enumerate(lines):
+                        if 'Data' in line and ('Valor' in line or 'Histórico' in line):
+                            skip_lines = i
+                            break
+                    arquivo_extrato.seek(0)
+                    df_extrato = pd.read_csv(arquivo_extrato, sep=';', encoding='latin1', skiprows=skip_lines)
                 else:
+                    # Lê Excel, se não achar a coluna 'Data', tenta pular 7 linhas (Padrão Sicredi)
                     df_extrato = pd.read_excel(arquivo_extrato)
+                    if 'Data' not in df_extrato.columns and 'DATA' not in df_extrato.columns:
+                        arquivo_extrato.seek(0)
+                        df_extrato = pd.read_excel(arquivo_extrato, skiprows=7)
 
-                st.success("Extrato carregado com sucesso! Mapeie as colunas abaixo se necessário:")
+                # Limpeza Padrão das Colunas (Remove espaços vazios)
+                df_extrato.columns = df_extrato.columns.str.strip()
+                df_extrato.dropna(how='all', inplace=True) # Remove linhas totalmente vazias
 
-                # 2. Mapeamento de Colunas (Flexibilidade para o formato do Sicredi)
+                st.success("Extrato carregado e higienizado com sucesso!")
+
                 col1, col2, col3 = st.columns(3)
                 colunas_extrato = list(df_extrato.columns)
                 
-                # Tenta adivinhar as colunas padrão do Sicredi
+                # Tenta adivinhar as colunas padrão do Sicredi automaticamente
                 idx_data = colunas_extrato.index('Data') if 'Data' in colunas_extrato else 0
                 idx_hist = colunas_extrato.index('Histórico') if 'Histórico' in colunas_extrato else 0
                 idx_valor = colunas_extrato.index('Valor') if 'Valor' in colunas_extrato else 0
@@ -643,12 +654,18 @@ if check_password():
                         # Preparar dados do Extrato
                         df_ext = df_extrato[[col_data, col_hist, col_valor]].copy()
                         df_ext.columns = ['Data', 'Historico', 'Valor']
-                        df_ext['Data'] = pd.to_datetime(df_ext['Data'], dayfirst=True).dt.date
-                        df_ext['Valor'] = pd.to_numeric(df_ext['Valor'].astype(str).str.replace(',', '.'), errors='coerce')
                         
+                        # Tratamento robusto de Data e Valor
+                        df_ext['Data'] = pd.to_datetime(df_ext['Data'], dayfirst=True, errors='coerce').dt.date
+                        # Remove R$, converte , para . e transforma em número
+                        df_ext['Valor'] = df_ext['Valor'].astype(str).str.replace('R$', '').str.replace('.', '', regex=False).str.replace(',', '.')
+                        df_ext['Valor'] = pd.to_numeric(df_ext['Valor'], errors='coerce')
+                        
+                        # Remove linhas onde a Data ou Valor ficaram nulos (ex: Saldo Anterior)
+                        df_ext = df_ext.dropna(subset=['Data', 'Valor'])
+
                         # Filtrar apenas saídas (despesas) no extrato (valores negativos)
                         df_ext_saidas = df_ext[df_ext['Valor'] < 0].copy()
-                        # Converter para positivo para comparar com o sistema
                         df_ext_saidas['Valor_Absoluto'] = df_ext_saidas['Valor'].abs() 
 
                         # Preparar dados do Sistema
@@ -657,12 +674,10 @@ if check_password():
                         df_sistema['data_liquidacao'] = pd.to_datetime(df_sistema['data_liquidacao']).dt.date
                         df_sistema['valor'] = pd.to_numeric(df_sistema['valor'])
 
-                        # 3. Cruzamento de Dados (Merge)
-                        # Arredondando valores para evitar erro de float (centavos)
+                        # Cruzamento de Dados (Merge)
                         df_ext_saidas['Valor_Round'] = df_ext_saidas['Valor_Absoluto'].round(2)
                         df_sistema['Valor_Round'] = df_sistema['valor'].round(2)
 
-                        # Merge usando Data e Valor
                         conciliacao = pd.merge(
                             df_ext_saidas, 
                             df_sistema, 
@@ -672,7 +687,7 @@ if check_password():
                             indicator=True
                         )
 
-                        # 4. Resultados
+                        # Resultados
                         df_nao_encontrados = conciliacao[conciliacao['_merge'] == 'left_only']
                         df_conciliados = conciliacao[conciliacao['_merge'] == 'both']
 
@@ -686,7 +701,6 @@ if check_password():
                         with tab_pendentes:
                             if not df_nao_encontrados.empty:
                                 st.warning("As seguintes despesas constam no extrato do Sicredi, mas não foram achadas no seu sistema:")
-                                # Limpar dataframe para exibição
                                 view_pendentes = df_nao_encontrados[['Data', 'Historico', 'Valor_Absoluto']].copy()
                                 view_pendentes.columns = ['Data Extrato', 'Descrição do Banco', 'Valor (R$)']
                                 st.dataframe(view_pendentes, use_container_width=True)
@@ -697,7 +711,7 @@ if check_password():
                             st.dataframe(df_conciliados[['Data', 'Historico', 'Valor_Absoluto', 'fornecedor', 'categoria']], use_container_width=True)
 
             except Exception as e:
-                st.error(f"Erro ao processar o arquivo: {e}")
+                st.error(f"Erro ao processar o arquivo. Verifique se o arquivo está corrompido ou protegido. Detalhe do erro: {e}")
 
     # --- ABA: CONFIGURAÇÕES ---
     elif menu == "Configurações":
