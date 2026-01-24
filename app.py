@@ -33,14 +33,14 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 def carregar_dados():
     try:
-        df = conn.read(worksheet="lancamentos", ttl=0)
+        df = conn.read(worksheet="lancamentos", ttl=60)
         return df
     except:
         return pd.DataFrame()
 
 def carregar_fornecedores_df():
     try:
-        df = conn.read(worksheet="fornecedores", ttl=0)
+        df = conn.read(worksheet="fornecedores", ttl=60)
         colunas_necessarias = ['nome', 'cnpj', 'telefone', 'login_app', 'senha_app']
         for col in colunas_necessarias:
             if col not in df.columns:
@@ -75,7 +75,7 @@ def salvar_tabela_fornecedores(df_editado):
 
 def salvar_lancamento(dados):
     try:
-        df = conn.read(worksheet="lancamentos", ttl=0)
+        df = conn.read(worksheet="lancamentos", ttl=60)
         novo_df = pd.DataFrame([dados])
         df_atualizado = pd.concat([df, novo_df], ignore_index=True)
         conn.update(worksheet="lancamentos", data=df_atualizado)
@@ -85,7 +85,7 @@ def salvar_lancamento(dados):
 
 def salvar_lote_lancamentos(df_novos):
     try:
-        df = conn.read(worksheet="lancamentos", ttl=0)
+        df = conn.read(worksheet="lancamentos", ttl=60)
         df_atualizado = pd.concat([df, df_novos], ignore_index=True)
         conn.update(worksheet="lancamentos", data=df_atualizado)
     except:
@@ -93,7 +93,7 @@ def salvar_lote_lancamentos(df_novos):
 
 def excluir_lancamentos(indices_para_excluir):
     try:
-        df = conn.read(worksheet="lancamentos", ttl=0)
+        df = conn.read(worksheet="lancamentos", ttl=60)
         df_atualizado = df.drop(indices_para_excluir).reset_index(drop=True)
         conn.update(worksheet="lancamentos", data=df_atualizado)
     except Exception as e:
@@ -101,7 +101,7 @@ def excluir_lancamentos(indices_para_excluir):
 
 def editar_lancamento(indice, novos_dados):
     try:
-        df = conn.read(worksheet="lancamentos", ttl=0)
+        df = conn.read(worksheet="lancamentos", ttl=60)
         for chave, valor in novos_dados.items():
             df.at[indice, chave] = valor
         conn.update(worksheet="lancamentos", data=df)
@@ -978,3 +978,4 @@ if check_password():
                 st.success("Lista de fornecedores atualizada com sucesso!")
                 st.cache_data.clear()
                 st.rerun()
+
