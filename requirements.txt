@@ -1,5 +1,12 @@
-streamlit
-pandas
-st-gsheets-connection
-extra-streamlit-components
-xlrd>=2.0.1
+streamlit>=1.31.0
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Leitura Excel
+openpyxl>=3.1.2
+xlrd==2.0.1
+
+# Conexão Google Sheets via streamlit_gsheets
+streamlit-gsheets>=0.1.0
+gspread>=6.0.0
+google-auth>=2.0.0
