@@ -596,7 +596,7 @@ if check_password():
         else:
             st.info("Nenhum dado lançado ainda.")
 
-    # --- ABA: CONCILIAÇÃO BANCÁRIA (SICREDI - ROBUSTO) ---
+    # --- ABA: CONCILIAÇÃO BANCÁRIA (SICREDI - DEFINITIVO) ---
     elif menu == "Conciliação Bancária":
         st.header("🏦 Conciliação Bancária (Sicredi)")
         
@@ -646,33 +646,37 @@ if check_password():
 
                 if st.button("🔍 Iniciar Conciliação", type="primary"):
                     with st.spinner("Comparando lançamentos com 100% de precisão..."):
-                        # Preparar dados do Extrato
+                        
+                        # --- 1. PREPARAÇÃO DOS DADOS DO BANCO ---
                         df_ext = df_extrato[[col_data, col_hist, col_valor]].copy()
                         df_ext.columns = ['Data', 'Historico', 'Valor']
                         
-                        # Converte a data para um formato padronizado
-                        df_ext['Data_Limpa'] = pd.to_datetime(df_ext['Data'], dayfirst=True, errors='coerce').dt.strftime('%Y-%m-%d')
-                        df_ext['Valor'] = df_ext['Valor'].astype(str).str.replace('R$', '').str.replace('.', '', regex=False).str.replace(',', '.')
-                        df_ext['Valor'] = pd.to_numeric(df_ext['Valor'], errors='coerce')
+                        # Tratamento da Data e Valor
+                        df_ext['Data_Formatada'] = pd.to_datetime(df_ext['Data'], dayfirst=True, errors='coerce').dt.date
+                        df_ext['Valor_Numerico'] = df_ext['Valor'].astype(str).str.replace('R$', '').str.replace('.', '', regex=False).str.replace(',', '.')
+                        df_ext['Valor_Numerico'] = pd.to_numeric(df_ext['Valor_Numerico'], errors='coerce')
                         
-                        df_ext = df_ext.dropna(subset=['Data_Limpa', 'Valor'])
+                        # Filtra apenas as SAÍDAS (Valores Negativos)
+                        df_ext_saidas = df_ext[df_ext['Valor_Numerico'] < 0].dropna(subset=['Data_Formatada', 'Valor_Numerico']).copy()
+                        df_ext_saidas['Valor_Absoluto'] = df_ext_saidas['Valor_Numerico'].abs() 
 
-                        # Filtrar apenas saídas e criar chaves em formato TEXTO para o merge
-                        df_ext_saidas = df_ext[df_ext['Valor'] < 0].copy()
-                        df_ext_saidas['Valor_Absoluto'] = df_ext_saidas['Valor'].abs() 
-                        df_ext_saidas['CHAVE_DATA'] = df_ext_saidas['Data_Limpa']
-                        df_ext_saidas['CHAVE_VALOR'] = df_ext_saidas['Valor_Absoluto'].round(2).astype(str)
+                        # O SEGREDO ESTÁ AQUI: Criação das "Chaves Textuais Estritas"
+                        df_ext_saidas['CHAVE_DATA'] = df_ext_saidas['Data_Formatada'].astype(str).str.strip()
+                        # Força o número a ser um texto com exatas 2 casas decimais (Ex: "150.00")
+                        df_ext_saidas['CHAVE_VALOR'] = df_ext_saidas['Valor_Absoluto'].apply(lambda x: "{:.2f}".format(x))
 
-                        # Preparar dados do Sistema
+
+                        # --- 2. PREPARAÇÃO DOS DADOS DO SISTEMA ---
                         df_sistema = carregar_dados()
                         df_sistema = df_sistema[df_sistema['tipo'] == 'Despesa'].copy()
                         df_sistema['valor'] = pd.to_numeric(df_sistema['valor'])
                         
-                        # Criar chaves em formato TEXTO para o merge no sistema
-                        df_sistema['CHAVE_DATA'] = pd.to_datetime(df_sistema['data_liquidacao']).dt.strftime('%Y-%m-%d')
-                        df_sistema['CHAVE_VALOR'] = df_sistema['valor'].round(2).astype(str)
+                        # O SEGREDO ESTÁ AQUI: Criação das "Chaves Textuais Estritas" para o sistema
+                        df_sistema['CHAVE_DATA'] = pd.to_datetime(df_sistema['data_liquidacao']).dt.date.astype(str).str.strip()
+                        df_sistema['CHAVE_VALOR'] = df_sistema['valor'].apply(lambda x: "{:.2f}".format(x))
 
-                        # Cruzamento Exato dos Dados (Inner Merge para encontrar os conciliados)
+
+                        # --- 3. O CRUZAMENTO EXATO (MERGE) ---
                         df_conciliados = pd.merge(
                             df_ext_saidas, 
                             df_sistema, 
@@ -680,36 +684,37 @@ if check_password():
                             how='inner'
                         )
 
-                        # Identificar os NÃO conciliados do extrato
+                        # Encontrar os NÃO conciliados do extrato
                         chaves_conciliadas = df_conciliados['CHAVE_DATA'] + df_conciliados['CHAVE_VALOR']
                         df_ext_saidas['CHAVE_UNICA'] = df_ext_saidas['CHAVE_DATA'] + df_ext_saidas['CHAVE_VALOR']
                         df_nao_encontrados = df_ext_saidas[~df_ext_saidas['CHAVE_UNICA'].isin(chaves_conciliadas)]
 
+                        # --- 4. EXIBIÇÃO DOS RESULTADOS ---
                         st.markdown("---")
                         c1, c2 = st.columns(2)
                         c1.metric("✅ Despesas Encontradas (Conciliadas)", len(df_conciliados))
                         c2.metric("⚠️ Despesas NÃO Lançadas no Sistema", len(df_nao_encontrados))
 
-                        tab_pendentes, tab_ok = st.tabs(["🔴 Pendentes de Lançamento", "🟢 Já Conciliados (Lado a Lado)"])
+                        tab_pendentes, tab_ok, tab_debug = st.tabs(["🔴 Pendentes de Lançamento", "🟢 Já Conciliados (Lado a Lado)", "🛠️ Diagnóstico de Erro"])
 
                         with tab_pendentes:
                             if not df_nao_encontrados.empty:
                                 st.warning("As seguintes despesas constam no extrato do Sicredi, mas não foram achadas no seu sistema:")
-                                view_pendentes = df_nao_encontrados[['Data', 'Historico', 'Valor_Absoluto']].copy()
+                                view_pendentes = df_nao_encontrados[['Data_Formatada', 'Historico', 'Valor_Absoluto']].copy()
                                 view_pendentes.columns = ['Data Extrato', 'Descrição do Banco', 'Valor (R$)']
+                                view_pendentes['Data Extrato'] = pd.to_datetime(view_pendentes['Data Extrato']).dt.strftime('%d/%m/%Y')
                                 st.dataframe(view_pendentes, use_container_width=True)
                             else:
                                 st.success("Parabéns! Todas as despesas do extrato estão lançadas no sistema.")
 
-                        # --- VISUALIZAÇÃO LADO A LADO APRIMORADA ---
+                        # --- VISUALIZAÇÃO LADO A LADO ---
                         with tab_ok:
                             if not df_conciliados.empty:
                                 st.success("Estes lançamentos do extrato encontraram seu par perfeito no sistema:")
                                 
-                                # Selecionando e renomeando as colunas para ficar muito claro
                                 view_ok = df_conciliados[[
-                                    'Data_Limpa', 'Historico', 'Valor_Absoluto', # Colunas do Banco
-                                    'fornecedor', 'categoria' # Colunas do Sistema
+                                    'Data_Formatada', 'Historico', 'Valor_Absoluto', # Banco
+                                    'fornecedor', 'categoria' # Sistema
                                 ]].copy()
                                 
                                 view_ok.columns = [
@@ -717,22 +722,33 @@ if check_password():
                                     '🛒 Fornecedor (Sistema)', '📂 Categoria (Sistema)'
                                 ]
                                 
-                                # Formatando a data para exibição PT-BR
                                 view_ok['📅 Data'] = pd.to_datetime(view_ok['📅 Data']).dt.strftime('%d/%m/%Y')
 
                                 st.dataframe(
                                     view_ok, 
                                     use_container_width=True,
-                                    column_config={
-                                        "💵 Valor": st.column_config.NumberColumn(format="R$ %.2f")
-                                    },
+                                    column_config={"💵 Valor": st.column_config.NumberColumn(format="R$ %.2f")},
                                     hide_index=True
                                 )
                             else:
-                                st.error("Nenhum lançamento foi conciliado. Verifique se as datas e os valores no seu sistema estão EXATAMENTE iguais aos do extrato.")
+                                st.error("Nenhum lançamento foi conciliado. Verifique a aba 'Diagnóstico de Erro'.")
+
+                        # --- 5. FERRAMENTA DE DIAGNÓSTICO PARA O USUÁRIO ---
+                        with tab_debug:
+                            st.info("💡 **Por que não conciliou?** Compare a forma como o computador está lendo os dados abaixo. Se a 'Chave' do Banco for diferente da 'Chave' do Sistema, a conciliação não ocorre.")
+                            
+                            col_d1, col_d2 = st.columns(2)
+                            with col_d1:
+                                st.markdown("##### 🏦 Como o sistema lê o Banco:")
+                                debug_banco = df_ext_saidas[['Data', 'Historico', 'CHAVE_DATA', 'CHAVE_VALOR']].head(5)
+                                st.dataframe(debug_banco, use_container_width=True)
+                            with col_d2:
+                                st.markdown("##### 🛒 Como o sistema lê o seu Google Sheets:")
+                                debug_sys = df_sistema[['fornecedor', 'categoria', 'CHAVE_DATA', 'CHAVE_VALOR']].head(5)
+                                st.dataframe(debug_sys, use_container_width=True)
 
             except Exception as e:
-                st.error(f"Erro ao processar o arquivo. Verifique se o arquivo está corrompido ou protegido. Detalhe do erro: {e}")
+                st.error(f"Erro ao processar o arquivo. Detalhe do erro: {e}")
 
     # --- ABA: CONFIGURAÇÕES ---
     elif menu == "Configurações":
