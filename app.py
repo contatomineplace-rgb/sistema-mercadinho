@@ -615,7 +615,6 @@ if check_password():
                 arquivo_extrato.seek(0)
                 
                 if arquivo_extrato.name.endswith('csv'):
-                    # Lê como texto para encontrar a linha "Data"
                     text_data = arquivo_extrato.getvalue().decode('latin1', errors='ignore')
                     lines = text_data.splitlines()
                     for i, line in enumerate(lines):
@@ -625,22 +624,18 @@ if check_password():
                     arquivo_extrato.seek(0)
                     df_extrato = pd.read_csv(arquivo_extrato, sep=';', encoding='latin1', skiprows=skip_lines)
                 else:
-                    # Lê Excel, se não achar a coluna 'Data', tenta pular 7 linhas (Padrão Sicredi)
                     df_extrato = pd.read_excel(arquivo_extrato)
                     if 'Data' not in df_extrato.columns and 'DATA' not in df_extrato.columns:
                         arquivo_extrato.seek(0)
                         df_extrato = pd.read_excel(arquivo_extrato, skiprows=7)
 
-                # Limpeza Padrão das Colunas (Remove espaços vazios)
+                # Limpeza Padrão das Colunas
                 df_extrato.columns = df_extrato.columns.str.strip()
-                df_extrato.dropna(how='all', inplace=True) # Remove linhas totalmente vazias
-
-                st.success("Extrato carregado e higienizado com sucesso!")
+                df_extrato.dropna(how='all', inplace=True)
 
                 col1, col2, col3 = st.columns(3)
                 colunas_extrato = list(df_extrato.columns)
                 
-                # Tenta adivinhar as colunas padrão do Sicredi automaticamente
                 idx_data = colunas_extrato.index('Data') if 'Data' in colunas_extrato else 0
                 idx_hist = colunas_extrato.index('Histórico') if 'Histórico' in colunas_extrato else 0
                 idx_valor = colunas_extrato.index('Valor') if 'Valor' in colunas_extrato else 0
@@ -650,53 +645,52 @@ if check_password():
                 with col3: col_valor = st.selectbox("Coluna de Valor", colunas_extrato, index=idx_valor)
 
                 if st.button("🔍 Iniciar Conciliação", type="primary"):
-                    with st.spinner("Comparando lançamentos..."):
+                    with st.spinner("Comparando lançamentos com 100% de precisão..."):
                         # Preparar dados do Extrato
                         df_ext = df_extrato[[col_data, col_hist, col_valor]].copy()
                         df_ext.columns = ['Data', 'Historico', 'Valor']
                         
-                        # Tratamento robusto de Data e Valor
-                        df_ext['Data'] = pd.to_datetime(df_ext['Data'], dayfirst=True, errors='coerce').dt.date
-                        # Remove R$, converte , para . e transforma em número
+                        # Converte a data para um formato padronizado
+                        df_ext['Data_Limpa'] = pd.to_datetime(df_ext['Data'], dayfirst=True, errors='coerce').dt.strftime('%Y-%m-%d')
                         df_ext['Valor'] = df_ext['Valor'].astype(str).str.replace('R$', '').str.replace('.', '', regex=False).str.replace(',', '.')
                         df_ext['Valor'] = pd.to_numeric(df_ext['Valor'], errors='coerce')
                         
-                        # Remove linhas onde a Data ou Valor ficaram nulos (ex: Saldo Anterior)
-                        df_ext = df_ext.dropna(subset=['Data', 'Valor'])
+                        df_ext = df_ext.dropna(subset=['Data_Limpa', 'Valor'])
 
-                        # Filtrar apenas saídas (despesas) no extrato (valores negativos)
+                        # Filtrar apenas saídas e criar chaves em formato TEXTO para o merge
                         df_ext_saidas = df_ext[df_ext['Valor'] < 0].copy()
                         df_ext_saidas['Valor_Absoluto'] = df_ext_saidas['Valor'].abs() 
+                        df_ext_saidas['CHAVE_DATA'] = df_ext_saidas['Data_Limpa']
+                        df_ext_saidas['CHAVE_VALOR'] = df_ext_saidas['Valor_Absoluto'].round(2).astype(str)
 
                         # Preparar dados do Sistema
                         df_sistema = carregar_dados()
                         df_sistema = df_sistema[df_sistema['tipo'] == 'Despesa'].copy()
-                        df_sistema['data_liquidacao'] = pd.to_datetime(df_sistema['data_liquidacao']).dt.date
                         df_sistema['valor'] = pd.to_numeric(df_sistema['valor'])
+                        
+                        # Criar chaves em formato TEXTO para o merge no sistema
+                        df_sistema['CHAVE_DATA'] = pd.to_datetime(df_sistema['data_liquidacao']).dt.strftime('%Y-%m-%d')
+                        df_sistema['CHAVE_VALOR'] = df_sistema['valor'].round(2).astype(str)
 
-                        # Cruzamento de Dados (Merge)
-                        df_ext_saidas['Valor_Round'] = df_ext_saidas['Valor_Absoluto'].round(2)
-                        df_sistema['Valor_Round'] = df_sistema['valor'].round(2)
-
-                        conciliacao = pd.merge(
+                        # Cruzamento Exato dos Dados (Inner Merge para encontrar os conciliados)
+                        df_conciliados = pd.merge(
                             df_ext_saidas, 
                             df_sistema, 
-                            left_on=['Data', 'Valor_Round'], 
-                            right_on=['data_liquidacao', 'Valor_Round'], 
-                            how='left', 
-                            indicator=True
+                            on=['CHAVE_DATA', 'CHAVE_VALOR'], 
+                            how='inner'
                         )
 
-                        # Resultados
-                        df_nao_encontrados = conciliacao[conciliacao['_merge'] == 'left_only']
-                        df_conciliados = conciliacao[conciliacao['_merge'] == 'both']
+                        # Identificar os NÃO conciliados do extrato
+                        chaves_conciliadas = df_conciliados['CHAVE_DATA'] + df_conciliados['CHAVE_VALOR']
+                        df_ext_saidas['CHAVE_UNICA'] = df_ext_saidas['CHAVE_DATA'] + df_ext_saidas['CHAVE_VALOR']
+                        df_nao_encontrados = df_ext_saidas[~df_ext_saidas['CHAVE_UNICA'].isin(chaves_conciliadas)]
 
                         st.markdown("---")
                         c1, c2 = st.columns(2)
                         c1.metric("✅ Despesas Encontradas (Conciliadas)", len(df_conciliados))
                         c2.metric("⚠️ Despesas NÃO Lançadas no Sistema", len(df_nao_encontrados))
 
-                        tab_pendentes, tab_ok = st.tabs(["🔴 Pendentes de Lançamento", "🟢 Já Conciliados"])
+                        tab_pendentes, tab_ok = st.tabs(["🔴 Pendentes de Lançamento", "🟢 Já Conciliados (Lado a Lado)"])
 
                         with tab_pendentes:
                             if not df_nao_encontrados.empty:
@@ -707,23 +701,35 @@ if check_password():
                             else:
                                 st.success("Parabéns! Todas as despesas do extrato estão lançadas no sistema.")
 
-                        # --- NOVA VISUALIZAÇÃO LADO A LADO ---
+                        # --- VISUALIZAÇÃO LADO A LADO APRIMORADA ---
                         with tab_ok:
                             if not df_conciliados.empty:
-                                view_ok = df_conciliados[['Data', 'Historico', 'Valor_Absoluto', 'fornecedor', 'categoria', 'valor']].copy()
-                                view_ok.columns = ['Data (Banco)', 'Histórico (Banco)', 'Valor (Banco)', 'Fornecedor (Sistema)', 'Categoria (Sistema)', 'Valor (Sistema)']
+                                st.success("Estes lançamentos do extrato encontraram seu par perfeito no sistema:")
                                 
+                                # Selecionando e renomeando as colunas para ficar muito claro
+                                view_ok = df_conciliados[[
+                                    'Data_Limpa', 'Historico', 'Valor_Absoluto', # Colunas do Banco
+                                    'fornecedor', 'categoria' # Colunas do Sistema
+                                ]].copy()
+                                
+                                view_ok.columns = [
+                                    '📅 Data', '🏦 Histórico (Banco)', '💵 Valor', 
+                                    '🛒 Fornecedor (Sistema)', '📂 Categoria (Sistema)'
+                                ]
+                                
+                                # Formatando a data para exibição PT-BR
+                                view_ok['📅 Data'] = pd.to_datetime(view_ok['📅 Data']).dt.strftime('%d/%m/%Y')
+
                                 st.dataframe(
                                     view_ok, 
                                     use_container_width=True,
                                     column_config={
-                                        "Valor (Banco)": st.column_config.NumberColumn("Valor (Banco)", format="R$ %.2f"),
-                                        "Valor (Sistema)": st.column_config.NumberColumn("Valor (Sistema)", format="R$ %.2f")
+                                        "💵 Valor": st.column_config.NumberColumn(format="R$ %.2f")
                                     },
                                     hide_index=True
                                 )
                             else:
-                                st.info("Nenhum lançamento foi conciliado ainda.")
+                                st.error("Nenhum lançamento foi conciliado. Verifique se as datas e os valores no seu sistema estão EXATAMENTE iguais aos do extrato.")
 
             except Exception as e:
                 st.error(f"Erro ao processar o arquivo. Verifique se o arquivo está corrompido ou protegido. Detalhe do erro: {e}")
