@@ -1,5 +1,7 @@
-streamlit==1.53.1
-pandas==3.0.0
-st-gsheets-connection==0.1.0
-openpyxl==3.1.5
+streamlit
+pandas
+numpy
+streamlit-gsheets
+gspread
+openpyxl
 xlrd==2.0.1
