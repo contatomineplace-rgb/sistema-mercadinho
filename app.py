@@ -5,8 +5,6 @@ import hashlib
 from datetime import datetime, date
 import io
 import csv
-import numpy as np
-from pathlib import Path
 from streamlit_gsheets import GSheetsConnection
 
 # --- CONFIGURAÇÕES INICIAIS ---
@@ -33,14 +31,14 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 def carregar_dados():
     try:
-        df = conn.read(worksheet="lancamentos", ttl=60)
+        df = conn.read(worksheet="lancamentos", ttl=0)
         return df
     except:
         return pd.DataFrame()
 
 def carregar_fornecedores_df():
     try:
-        df = conn.read(worksheet="fornecedores", ttl=60)
+        df = conn.read(worksheet="fornecedores", ttl=0)
         colunas_necessarias = ['nome', 'cnpj', 'telefone', 'login_app', 'senha_app']
         for col in colunas_necessarias:
             if col not in df.columns:
@@ -75,7 +73,7 @@ def salvar_tabela_fornecedores(df_editado):
 
 def salvar_lancamento(dados):
     try:
-        df = conn.read(worksheet="lancamentos", ttl=60)
+        df = conn.read(worksheet="lancamentos", ttl=0)
         novo_df = pd.DataFrame([dados])
         df_atualizado = pd.concat([df, novo_df], ignore_index=True)
         conn.update(worksheet="lancamentos", data=df_atualizado)
@@ -85,7 +83,7 @@ def salvar_lancamento(dados):
 
 def salvar_lote_lancamentos(df_novos):
     try:
-        df = conn.read(worksheet="lancamentos", ttl=60)
+        df = conn.read(worksheet="lancamentos", ttl=0)
         df_atualizado = pd.concat([df, df_novos], ignore_index=True)
         conn.update(worksheet="lancamentos", data=df_atualizado)
     except:
@@ -93,7 +91,7 @@ def salvar_lote_lancamentos(df_novos):
 
 def excluir_lancamentos(indices_para_excluir):
     try:
-        df = conn.read(worksheet="lancamentos", ttl=60)
+        df = conn.read(worksheet="lancamentos", ttl=0)
         df_atualizado = df.drop(indices_para_excluir).reset_index(drop=True)
         conn.update(worksheet="lancamentos", data=df_atualizado)
     except Exception as e:
@@ -101,7 +99,8 @@ def excluir_lancamentos(indices_para_excluir):
 
 def editar_lancamento(indice, novos_dados):
     try:
-        df = conn.read(worksheet="lancamentos", ttl=60)
+        df = conn.read(worksheet="lancamentos", ttl=0)
+        # Atualiza apenas a linha e colunas específicas
         for chave, valor in novos_dados.items():
             df.at[indice, chave] = valor
         conn.update(worksheet="lancamentos", data=df)
@@ -131,8 +130,7 @@ def formatar_input_br(key):
         valor_float = float(limpo)
         formatado = "{:,.2f}".format(valor_float).replace(",", "X").replace(".", ",").replace("X", ".")
         st.session_state[key] = formatado
-    except:
-        pass
+    except: pass
 
 def atualizar_data_liq():
     if st.session_state.get("check_repetir_data") and "memoria_data_liq" in st.session_state:
@@ -140,21 +138,26 @@ def atualizar_data_liq():
 
 # --- FUNÇÕES DE AUTENTICAÇÃO E LOGIN ---
 def gerar_token_auth():
+    """Gera um token seguro baseado nas credenciais do arquivo secrets"""
     email_secreto = st.secrets["login"]["email"]
     senha_secreta = st.secrets["login"]["senha"]
+    # Cria um hash SHA-256 combinando email, senha e um texto base para segurança
     texto_base = email_secreto + senha_secreta + "mercadinho_seguro_2026"
     return hashlib.sha256(texto_base.encode()).hexdigest()
 
 def check_password():
     token_esperado = gerar_token_auth()
 
+    # 1. Verifica se já está logado na sessão atual
     if st.session_state.get("password_correct", False):
         return True
 
+    # 2. Verifica se a URL contém o token correto (sobrevive ao F5/Refresh)
     if st.query_params.get("auth") == token_esperado:
         st.session_state["password_correct"] = True
         return True
 
+    # 3. Se não estiver logado, exibe a tela de login
     st.markdown("## 🔐 Acesso Restrito")
     col1, col2 = st.columns([1, 2])
     with col1:
@@ -165,117 +168,22 @@ def check_password():
             user_pass = st.secrets["login"]["senha"]
             if email == user_email and password == user_pass:
                 st.session_state["password_correct"] = True
+                # Salva o token na URL para que o login persista após o refresh
                 st.query_params["auth"] = token_esperado
                 st.rerun()
             else:
                 st.error("Dados incorretos.")
     return False
 
-# ------------------------------
-# FUNÇÕES AUXILIARES CONCILIAÇÃO
-# ------------------------------
-def moeda_para_float(v):
-    """
-    Converte valores que podem vir como:
-    - número (float/int) => retorna float
-    - string "R$ 1.234,56" ou "1.234,56" => retorna float 1234.56
-    - string "50,00" => 50.0
-    Preserva o sinal, se existir (ex.: -50,00).
-    """
-    if pd.isna(v):
-        return np.nan
-
-    if isinstance(v, (int, float, np.integer, np.floating)):
-        return float(v)
-
-    s = str(v).strip()
-    s = s.replace("R$", "").replace(" ", "")
-    s = s.replace(".", "").replace(",", ".")
-    try:
-        return float(s)
-    except:
-        return np.nan
-
-def ler_extrato_upload(arquivo_extrato):
-    """
-    Lê XLS/XLSX corretamente como planilha.
-    Lê CSV como texto (latin1) e tenta identificar cabeçalho.
-    Retorna df_extrato (DataFrame) e uma string de status.
-    """
-    ext = Path(arquivo_extrato.name).suffix.lower()
-
-    if ext in [".xls", ".xlsx"]:
-        try:
-            engine = "openpyxl" if ext == ".xlsx" else "xlrd"
-            df_extrato = pd.read_excel(arquivo_extrato, engine=engine)
-            df_extrato.columns = df_extrato.columns.astype(str).str.strip()
-            df_extrato.dropna(how="all", inplace=True)
-            return df_extrato, f"Excel lido com sucesso ({ext})."
-        except Exception as e:
-            return pd.DataFrame(), f"Falha ao ler Excel ({ext}): {e}"
-
-    try:
-        arquivo_extrato.seek(0)
-        text_data = arquivo_extrato.getvalue().decode("latin1", errors="ignore")
-        lines = text_data.splitlines()
-
-        header_idx = None
-        for i, line in enumerate(lines):
-            if "Data" in line and ("Descrição" in line or "Histórico" in line) and "Valor" in line:
-                header_idx = i
-                break
-
-        if header_idx is None:
-            header_idx = 0
-
-        delimiter = ";" if ";" in lines[header_idx] else ","
-        reader = csv.reader(lines[header_idx:], delimiter=delimiter)
-        parsed_data = [row for row in reader]
-
-        if len(parsed_data) <= 1:
-            return pd.DataFrame(), "CSV lido, mas não há dados após o cabeçalho."
-
-        header = [h.strip() for h in parsed_data[0]]
-        max_cols = len(header)
-
-        clean_data = []
-        for row in parsed_data[1:]:
-            if len(row) > max_cols:
-                desc = " - ".join(row[1 : 1 + (len(row) - max_cols + 1)])
-                rest = row[1 + (len(row) - max_cols + 1) :]
-                row = [row[0], desc] + rest
-            clean_data.append(row[:max_cols])
-
-        df_extrato = pd.DataFrame(clean_data, columns=header)
-        df_extrato.columns = df_extrato.columns.astype(str).str.strip()
-        df_extrato.dropna(how="all", inplace=True)
-        return df_extrato, "CSV lido com sucesso."
-    except Exception as e:
-        return pd.DataFrame(), f"Falha ao ler CSV: {e}"
-
-def adicionar_seq_por_grupo(df, cols_grupo, col_seq="SEQ_DUP"):
-    """
-    Cria um identificador incremental (0,1,2,...) dentro de cada grupo cols_grupo,
-    permitindo conciliação 1:1 quando há duplicidades (mesma data+valor).
-    """
-    df = df.copy()
-    df[col_seq] = df.groupby(cols_grupo).cumcount()
-    return df
-
 # --- INTERFACE PRINCIPAL ---
 if check_password():
     st.sidebar.title("Menu")
-    menu = st.sidebar.radio(
-        "Navegar",
-        ["Lançar Despesa", "Lançar Receita", "Relatórios", "Conciliação Bancária", "Configurações"]
-    )
+    menu = st.sidebar.radio("Navegar", ["Lançar Despesa", "Lançar Receita", "Relatórios", "Conciliação Bancária", "Configurações"])
 
     # --- ABA: LANÇAR DESPESA ---
     if menu == "Lançar Despesa":
         st.header("📉 Gestão de Despesas")
-        tab_individual, tab_lote, tab_editar_excluir = st.tabs(
-            ["📝 Individual", "📚 Despesa em Lote", "✏️ Editar ou Excluir Despesa"]
-        )
+        tab_individual, tab_lote, tab_editar_excluir = st.tabs(["📝 Individual", "📚 Despesa em Lote", "✏️ Editar ou Excluir Despesa"])
 
         # === 1. LANÇAMENTO INDIVIDUAL ===
         with tab_individual:
@@ -285,7 +193,7 @@ if check_password():
                 st.session_state["sel_forn"] = None
                 st.session_state["txt_novo_forn"] = ""
                 st.session_state["check_novo_forn"] = False
-
+                
                 if st.session_state.get("check_repetir_data", False) and "memoria_data_liq" in st.session_state:
                     st.session_state["data_liq_desp"] = st.session_state["memoria_data_liq"]
                 else:
@@ -294,7 +202,7 @@ if check_password():
                 if not st.session_state.get("check_repetir_comp", False):
                     if "sel_mes_comp" in st.session_state: del st.session_state["sel_mes_comp"]
                     if "sel_ano_comp" in st.session_state: del st.session_state["sel_ano_comp"]
-
+                
                 if "status_desp" in st.session_state: del st.session_state["status_desp"]
                 if "cat_desp" in st.session_state: del st.session_state["cat_desp"]
                 del st.session_state["limpar_despesa_agora"]
@@ -311,64 +219,25 @@ if check_password():
                         idx_mes = list(MESES_PT.values()).index(st.session_state["memoria_mes"])
                     if st.session_state["memoria_ano"] in lista_anos:
                         idx_ano = lista_anos.index(st.session_state["memoria_ano"])
-                except:
-                    pass
+                except: pass
 
             col1, col2 = st.columns(2)
             with col1:
-                valor_str = st.text_input(
-                    "Valor Total (R$)",
-                    value="",
-                    key="val_desp",
-                    help="Digite o valor (ex: 150,00).",
-                    on_change=formatar_input_br,
-                    args=("val_desp",),
-                )
+                valor_str = st.text_input("Valor Total (R$)", value="", key="val_desp", help="Digite o valor (ex: 150,00).", on_change=formatar_input_br, args=("val_desp",))
                 data_liq = st.date_input("Data de Liquidação (Pagamento)", value=None, format="DD/MM/YYYY", key="data_liq_desp")
-                st.checkbox(
-                    "Mesma data de liquidação da despesa anterior",
-                    key="check_repetir_data",
-                    disabled="memoria_data_liq" not in st.session_state,
-                    on_change=atualizar_data_liq,
-                )
-                st.markdown("---")
+                st.checkbox("Mesma data de liquidação da despesa anterior", key="check_repetir_data", disabled="memoria_data_liq" not in st.session_state, on_change=atualizar_data_liq)
+                st.markdown("---") 
                 c_mes, c_ano = st.columns(2)
-                with c_mes:
-                    mes_selecionado = st.selectbox(
-                        "Mês de Competência",
-                        list(MESES_PT.values()),
-                        index=idx_mes,
-                        placeholder="Selecione o Mês",
-                        key="sel_mes_comp",
-                    )
-                with c_ano:
-                    ano_selecionado = st.selectbox(
-                        "Ano de Competência",
-                        lista_anos,
-                        index=idx_ano,
-                        placeholder="Selecione o Ano",
-                        key="sel_ano_comp",
-                    )
-                st.checkbox(
-                    "Mesmo ano e mês de competência da despesa salva anteriormente?",
-                    key="check_repetir_comp",
-                    disabled="memoria_mes" not in st.session_state,
-                )
+                with c_mes: mes_selecionado = st.selectbox("Mês de Competência", list(MESES_PT.values()), index=idx_mes, placeholder="Selecione o Mês", key="sel_mes_comp")
+                with c_ano: ano_selecionado = st.selectbox("Ano de Competência", lista_anos, index=idx_ano, placeholder="Selecione o Ano", key="sel_ano_comp")
+                st.checkbox("Mesmo ano e mês de competência da despesa salva anteriormente?", key="check_repetir_comp", disabled="memoria_mes" not in st.session_state) 
                 status = st.selectbox("Status", ["Pago", "A Pagar"], index=None, placeholder="Selecione o Status", key="status_desp")
-
+            
             with col2:
                 lista_fornecedores = carregar_lista_nomes_fornecedores()
                 usar_novo_fornecedor = st.checkbox("Cadastrar Novo Fornecedor?", key="check_novo_forn")
-                if usar_novo_fornecedor:
-                    fornecedor = st.text_input("Digite o nome do novo fornecedor", key="txt_novo_forn")
-                else:
-                    fornecedor = st.selectbox(
-                        "Selecione o Fornecedor",
-                        [""] + lista_fornecedores,
-                        index=None,
-                        placeholder="Selecione o Fornecedor",
-                        key="sel_forn",
-                    )
+                if usar_novo_fornecedor: fornecedor = st.text_input("Digite o nome do novo fornecedor", key="txt_novo_forn")
+                else: fornecedor = st.selectbox("Selecione o Fornecedor", [""] + lista_fornecedores, index=None, placeholder="Selecione o Fornecedor", key="sel_forn")
                 categoria = st.selectbox("Classificação", CATEGORIAS, index=None, placeholder="Selecione a Categoria", key="cat_desp")
                 obs = st.text_area("Observação", key="obs_desp")
 
@@ -387,8 +256,7 @@ if check_password():
                     st.warning(f"⚠️ Por favor, preencha os seguintes campos antes de salvar: {', '.join(erro_campos)}")
                 else:
                     valor_float = converter_moeda_br_para_float(valor_str)
-                    if usar_novo_fornecedor:
-                        salvar_fornecedor_rapido(fornecedor)
+                    if usar_novo_fornecedor: salvar_fornecedor_rapido(fornecedor)
                     mes_num = MESES_PT_INV[mes_selecionado]
                     competencia_formatada = f"{ano_selecionado}-{mes_num:02d}"
                     dados = {
@@ -400,11 +268,11 @@ if check_password():
                         "competencia": competencia_formatada,
                         "status": status,
                         "categoria": categoria,
-                        "observacao": obs,
+                        "observacao": obs
                     }
                     salvar_lancamento(dados)
                     st.success("Despesa registrada com sucesso! A tela será limpa em 3 segundos...")
-                    time.sleep(3)
+                    time.sleep(3) 
                     st.session_state["memoria_mes"] = mes_selecionado
                     st.session_state["memoria_ano"] = ano_selecionado
                     st.session_state["memoria_data_liq"] = data_liq
@@ -448,8 +316,7 @@ if check_password():
                     lista_dados_finais = []
                     erro_encontrado = False
                     for index, row in lote_editado.iterrows():
-                        if not row['fornecedor'] and pd.isna(row['valor']):
-                            continue
+                        if not row['fornecedor'] and pd.isna(row['valor']): continue
                         if not row['fornecedor'] or pd.isna(row['valor']) or pd.isna(row['data_liquidacao']) or not row['mes_competencia'] or not row['ano_competencia']:
                             st.warning(f"Linha {index + 1} incompleta. Verifique Valor, Data, Competência e Fornecedor.")
                             erro_encontrado = True
@@ -457,7 +324,7 @@ if check_password():
                         nome_forn = str(row['fornecedor']).strip()
                         if nome_forn.lower() not in nomes_forn_existentes:
                             salvar_fornecedor_rapido(nome_forn)
-                            nomes_forn_existentes.add(nome_forn.lower())
+                            nomes_forn_existentes.add(nome_forn.lower()) 
                         mes_num = MESES_PT_INV[row['mes_competencia']]
                         comp_fmt = f"{row['ano_competencia']}-{mes_num:02d}"
                         dados_linha = {
@@ -488,7 +355,7 @@ if check_password():
             if not df_dados.empty:
                 df_dados['valor'] = pd.to_numeric(df_dados['valor'])
                 df_dados['data_liquidacao'] = pd.to_datetime(df_dados['data_liquidacao'])
-
+                
                 col_f1, col_f2, col_f3 = st.columns(3)
                 with col_f1:
                     anos_disponiveis = sorted(df_dados['competencia'].str[:4].unique())
@@ -500,11 +367,9 @@ if check_password():
                     if not df_dados['valor'].empty:
                         valor_min = float(df_dados['valor'].min())
                         valor_max = float(df_dados['valor'].max())
-                        if valor_min == valor_max:
-                            valor_max += 1.0
+                        if valor_min == valor_max: valor_max += 1.0
                         filtro_valor = st.slider("Faixa de Valor (R$)", valor_min, valor_max, (valor_min, valor_max))
-                    else:
-                        filtro_valor = (0.0, 0.0)
+                    else: filtro_valor = (0.0, 0.0)
 
                 col_f4, col_f5 = st.columns(2)
                 with col_f4:
@@ -516,7 +381,7 @@ if check_password():
 
                 df_filtrado = df_dados.copy()
                 df_filtrado = df_filtrado[df_filtrado['tipo'] == 'Despesa']
-
+                
                 if filtro_ano: df_filtrado = df_filtrado[df_filtrado['competencia'].str[:4].isin(filtro_ano)]
                 if filtro_mes: df_filtrado = df_filtrado[df_filtrado['competencia'].str[5:].isin(filtro_mes)]
                 df_filtrado = df_filtrado[(df_filtrado['valor'] >= filtro_valor[0]) & (df_filtrado['valor'] <= filtro_valor[1])]
@@ -538,16 +403,16 @@ if check_password():
                         hide_index=True,
                         use_container_width=True
                     )
-
+                    
                     linhas_marcadas = editor_acao[editor_acao["Selecionar"] == True]
-
+                    
                     if not linhas_marcadas.empty:
                         indices_selecionados = linhas_marcadas.index.tolist()
                         qtd_selecionada = len(indices_selecionados)
-
+                        
                         st.markdown("---")
                         col_btn1, col_btn2 = st.columns(2)
-
+                        
                         with col_btn1:
                             if st.button("🗑️ CONFIRMAR EXCLUSÃO", type="secondary", use_container_width=True):
                                 excluir_lancamentos(indices_selecionados)
@@ -566,18 +431,18 @@ if check_password():
                         if "editando_idx" in st.session_state and st.session_state["editando_idx"] in indices_selecionados:
                             idx = st.session_state["editando_idx"]
                             linha_atual = df_filtrado.loc[idx]
-
+                            
                             st.markdown("### 📝 Editar Informações")
                             with st.form(key=f"form_editar_{idx}"):
                                 c1, c2 = st.columns(2)
                                 with c1:
                                     novo_valor = st.number_input("Valor (R$)", value=float(linha_atual['valor']), min_value=0.0)
                                     nova_data = st.date_input("Data de Liquidação", value=pd.to_datetime(linha_atual['data_liquidacao']).date(), format="DD/MM/YYYY")
-
+                                    
                                     ano_atual = linha_atual['competencia'][:4]
                                     mes_atual_num = int(linha_atual['competencia'][5:])
                                     mes_atual_nome = MESES_PT[mes_atual_num]
-
+                                    
                                     novo_mes = st.selectbox("Mês de Competência", list(MESES_PT.values()), index=list(MESES_PT.values()).index(mes_atual_nome))
                                     novo_ano = st.selectbox("Ano de Competência", gerar_lista_anos(), index=gerar_lista_anos().index(ano_atual))
                                     novo_status = st.selectbox("Status", ["Pago", "A Pagar"], index=["Pago", "A Pagar"].index(linha_atual['status']))
@@ -586,7 +451,7 @@ if check_password():
                                     lista_forn = carregar_lista_nomes_fornecedores()
                                     idx_forn = lista_forn.index(linha_atual['fornecedor']) if linha_atual['fornecedor'] in lista_forn else 0
                                     novo_fornecedor = st.selectbox("Fornecedor", lista_forn, index=idx_forn)
-
+                                    
                                     idx_cat = CATEGORIAS.index(linha_atual['categoria']) if linha_atual['categoria'] in CATEGORIAS else 0
                                     nova_categoria = st.selectbox("Categoria", CATEGORIAS, index=idx_cat)
                                     nova_obs = st.text_area("Observação", value=linha_atual['observacao'])
@@ -594,7 +459,7 @@ if check_password():
                                 if st.form_submit_button("💾 Salvar Edição", type="primary", use_container_width=True):
                                     mes_num = MESES_PT_INV[novo_mes]
                                     nova_comp = f"{novo_ano}-{mes_num:02d}"
-
+                                    
                                     dados_atualizados = {
                                         "valor": novo_valor,
                                         "fornecedor": novo_fornecedor,
@@ -604,17 +469,16 @@ if check_password():
                                         "categoria": nova_categoria,
                                         "observacao": nova_obs
                                     }
-
+                                    
                                     editar_lancamento(idx, dados_atualizados)
                                     st.success("Despesa atualizada com sucesso!")
                                     del st.session_state["editando_idx"]
                                     time.sleep(2)
                                     st.cache_data.clear()
                                     st.rerun()
-                else:
-                    st.info("Nenhuma despesa encontrada.")
-            else:
-                st.info("Não há dados cadastrados.")
+
+                else: st.info("Nenhuma despesa encontrada.")
+            else: st.info("Não há dados cadastrados.")
 
     # --- ABA: LANÇAR RECEITA ---
     elif menu == "Lançar Receita":
@@ -638,7 +502,7 @@ if check_password():
             with c_mes: mes_rec = st.selectbox("Mês Competência", list(MESES_PT.values()), index=idx_mes, key="mes_rec")
             with c_ano: ano_rec = st.selectbox("Ano Competência", lista_anos, key="ano_rec")
             obs = st.text_area("Observação", key="obs_rec")
-
+            
             st.markdown("---")
             if st.button("💾 Salvar Receita", type="primary"):
                 if not valor_str or not data_liq:
@@ -673,7 +537,7 @@ if check_password():
             st.rerun()
 
         df = carregar_dados()
-
+        
         if not df.empty:
             df['valor'] = pd.to_numeric(df['valor'])
             df['data_liquidacao'] = pd.to_datetime(df['data_liquidacao'])
@@ -701,7 +565,7 @@ if check_password():
             total_rec = df_filtered[df_filtered['tipo'] == 'Receita']['valor'].sum()
             total_desp = df_filtered[df_filtered['tipo'] == 'Despesa']['valor'].sum()
             saldo = total_rec - total_desp
-
+            
             c1, c2, c3 = st.columns(3)
             c1.metric("Receitas", f"R$ {total_rec:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
             c2.metric("Despesas", f"R$ {total_desp:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), delta_color="inverse")
@@ -723,7 +587,7 @@ if check_password():
 
             st.subheader("Extrato Detalhado")
             st.dataframe(
-                df_filtered.sort_values("data_liquidacao", ascending=False),
+                df_filtered.sort_values("data_liquidacao", ascending=False), 
                 use_container_width=True,
                 column_config={
                     "data_liquidacao": st.column_config.DateColumn("Data Liq.", format="DD/MM/YYYY"),
@@ -733,221 +597,177 @@ if check_password():
         else:
             st.info("Nenhum dado lançado ainda.")
 
-    # -------------------------------------------------------------------------
-    # --- ABA: CONCILIAÇÃO BANCÁRIA (SICREDI - LEITURA CORRETA + 1:1 DUPLICADOS) ---
-    # -------------------------------------------------------------------------
+    # --- ABA: CONCILIAÇÃO BANCÁRIA (SICREDI - LEITURA SOB MEDIDA) ---
     elif menu == "Conciliação Bancária":
         st.header("🏦 Conciliação Bancária (Sicredi)")
-
+        
         st.markdown("""
         **Como funciona:**
         1. Exporte o extrato da sua conta Sicredi (formato Excel ou CSV).
-        2. Faça o upload do arquivo abaixo. O sistema lê XLS/XLSX corretamente como planilha e CSV como texto.
-        3. A conciliação cruza **Data + Valor** com os lançamentos de despesas do seu Google Sheets.
-        4. Para evitar duplicidades quando há dois débitos iguais no mesmo dia, a conciliação usa um identificador incremental,
-           garantindo conciliação **1:1**.
+        2. Faça o upload do arquivo abaixo. O sistema já foi calibrado para o padrão do Sicredi.
         """)
 
         arquivo_extrato = st.file_uploader("📥 Envie o extrato do Sicredi", type=["csv", "xls", "xlsx"])
 
         if arquivo_extrato is not None:
             try:
-                # 1) Leitura correta do arquivo (Excel como Excel; CSV como CSV)
-                df_extrato, status_leitura = ler_extrato_upload(arquivo_extrato)
+                # =========================================================================
+                # 1. LEITOR SOB MEDIDA PARA O ARQUIVO DO SICREDI
+                # Ignora quebras de linha e vírgulas fantasmas do banco
+                # =========================================================================
+                arquivo_extrato.seek(0)
+                text_data = arquivo_extrato.getvalue().decode('latin1', errors='ignore')
+                lines = text_data.splitlines()
 
-                if df_extrato.empty:
-                    st.error("Não foi possível carregar o extrato. Verifique se o arquivo tem dados e cabeçalho.")
-                    st.info(status_leitura)
+                # Acha a linha do cabeçalho
+                header_idx = 0
+                for i, line in enumerate(lines):
+                    if 'Data' in line and ('Descrição' in line or 'Histórico' in line) and 'Valor' in line:
+                        header_idx = i
+                        break
+
+                # Identifica se o arquivo usa vírgula ou ponto e vírgula
+                delimiter = ';' if ';' in lines[header_idx] else ','
+
+                # Lê o arquivo usando o leitor nativo do Python (imune a erros de formatação)
+                reader = csv.reader(lines[header_idx:], delimiter=delimiter)
+                parsed_data = [row for row in reader]
+
+                if len(parsed_data) > 1:
+                    header = parsed_data[0]
+                    # Garante que a "Descrição" não roube espaço das outras colunas se houver vírgula extra
+                    clean_data = []
+                    max_cols = len(header)
+                    for row in parsed_data[1:]:
+                        if len(row) > max_cols:
+                            # Se a linha quebrou, junta o texto excedente na descrição
+                            desc = " - ".join(row[1 : 1 + (len(row) - max_cols + 1)])
+                            rest = row[1 + (len(row) - max_cols + 1) :]
+                            row = [row[0], desc] + rest
+                        clean_data.append(row[:max_cols])
+
+                    df_extrato = pd.DataFrame(clean_data, columns=header)
                 else:
-                    st.success(status_leitura)
+                    df_extrato = pd.DataFrame()
 
-                    df_extrato.columns = df_extrato.columns.astype(str).str.strip()
-                    colunas_extrato = list(df_extrato.columns)
+                # Limpeza final dos nomes das colunas
+                df_extrato.columns = df_extrato.columns.str.strip()
+                df_extrato.dropna(how='all', inplace=True)
 
-                    def achar_coluna_possiveis(nomes_alvo):
-                        for alvo in nomes_alvo:
-                            for c in colunas_extrato:
-                                if str(c).strip().lower() == alvo.lower():
-                                    return c
-                        for alvo in nomes_alvo:
-                            for c in colunas_extrato:
-                                if alvo.lower() in str(c).strip().lower():
-                                    return c
-                        return colunas_extrato[0] if colunas_extrato else None
+                # =========================================================================
 
-                    col_sugerida_data = achar_coluna_possiveis(["Data"])
-                    col_sugerida_hist = achar_coluna_possiveis(["Descrição", "Historico", "Histórico", "Descrição / Histórico"])
-                    col_sugerida_valor = achar_coluna_possiveis(["Valor (R$)", "Valor", "Valor R$", "Valor(R$)"])
+                col1, col2, col3 = st.columns(3)
+                colunas_extrato = list(df_extrato.columns)
+                
+                idx_data = colunas_extrato.index('Data') if 'Data' in colunas_extrato else 0
+                idx_hist = colunas_extrato.index('Descrição') if 'Descrição' in colunas_extrato else (colunas_extrato.index('Histórico') if 'Histórico' in colunas_extrato else 0)
+                idx_valor = colunas_extrato.index('Valor (R$)') if 'Valor (R$)' in colunas_extrato else (colunas_extrato.index('Valor') if 'Valor' in colunas_extrato else 0)
 
-                    idx_data = colunas_extrato.index(col_sugerida_data) if col_sugerida_data in colunas_extrato else 0
-                    idx_hist = colunas_extrato.index(col_sugerida_hist) if col_sugerida_hist in colunas_extrato else 0
-                    idx_valor = colunas_extrato.index(col_sugerida_valor) if col_sugerida_valor in colunas_extrato else 0
+                with col1: col_data = st.selectbox("Coluna de Data", colunas_extrato, index=idx_data)
+                with col2: col_hist = st.selectbox("Coluna de Histórico/Descrição", colunas_extrato, index=idx_hist)
+                with col3: col_valor = st.selectbox("Coluna de Valor", colunas_extrato, index=idx_valor)
 
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        col_data = st.selectbox("Coluna de Data", colunas_extrato, index=idx_data)
-                    with col2:
-                        col_hist = st.selectbox("Coluna de Histórico/Descrição", colunas_extrato, index=idx_hist)
-                    with col3:
-                        col_valor = st.selectbox("Coluna de Valor", colunas_extrato, index=idx_valor)
+                if st.button("🔍 Iniciar Conciliação", type="primary"):
+                    with st.spinner("Comparando lançamentos com 100% de precisão..."):
+                        
+                        # --- 2. PREPARAÇÃO DOS DADOS DO BANCO ---
+                        df_ext = df_extrato[[col_data, col_hist, col_valor]].copy()
+                        df_ext.columns = ['Data', 'Historico', 'Valor']
+                        
+                        # Converte a Data
+                        df_ext['Data_Formatada'] = pd.to_datetime(df_ext['Data'], dayfirst=True, errors='coerce').dt.date
+                        # Converte o Valor (agora ele lê os pontos originais do arquivo)
+                        df_ext['Valor_Numerico'] = pd.to_numeric(df_ext['Valor'], errors='coerce')
+                        
+                        # Filtra apenas as SAÍDAS (valores negativos)
+                        df_ext_saidas = df_ext[df_ext['Valor_Numerico'] < 0].dropna(subset=['Data_Formatada', 'Valor_Numerico']).copy()
+                        df_ext_saidas['Valor_Absoluto'] = df_ext_saidas['Valor_Numerico'].abs() 
 
-                    with st.expander("🧪 Diagnóstico (prévia do extrato)", expanded=False):
-                        st.write("Colunas detectadas:", colunas_extrato)
-                        st.dataframe(df_extrato.head(10), use_container_width=True)
-                        try:
-                            st.write("Tipo da coluna de valor selecionada:", df_extrato[col_valor].dtype)
-                        except:
-                            pass
+                        # Criação das "Chaves Textuais" para o Banco
+                        df_ext_saidas['CHAVE_DATA'] = df_ext_saidas['Data_Formatada'].astype(str).str.strip()
+                        df_ext_saidas['CHAVE_VALOR'] = df_ext_saidas['Valor_Absoluto'].apply(lambda x: "{:.2f}".format(x))
 
-                    if st.button("🔍 Iniciar Conciliação", type="primary"):
-                        with st.spinner("Comparando lançamentos com conciliação 1:1 (data + valor + sequência)..."):
 
-                            # 2) PREPARAÇÃO DOS DADOS DO BANCO
-                            df_ext = df_extrato[[col_data, col_hist, col_valor]].copy()
-                            df_ext.columns = ['Data', 'Historico', 'Valor']
+                        # --- 3. PREPARAÇÃO DOS DADOS DO SISTEMA ---
+                        df_sistema = carregar_dados()
+                        df_sistema = df_sistema[df_sistema['tipo'] == 'Despesa'].copy()
+                        df_sistema['valor'] = pd.to_numeric(df_sistema['valor'])
+                        
+                        # Criação das "Chaves Textuais" do Sistema
+                        df_sistema['CHAVE_DATA'] = pd.to_datetime(df_sistema['data_liquidacao']).dt.date.astype(str).str.strip()
+                        df_sistema['CHAVE_VALOR'] = df_sistema['valor'].apply(lambda x: "{:.2f}".format(x))
 
-                            df_ext['Data_Formatada'] = pd.to_datetime(df_ext['Data'], dayfirst=True, errors='coerce').dt.date
-                            df_ext['Valor_Numerico'] = df_ext['Valor'].apply(moeda_para_float)
 
-                            df_ext = df_ext.dropna(subset=['Data_Formatada', 'Valor_Numerico']).copy()
+                        # --- 4. O CRUZAMENTO EXATO (MERGE) ---
+                        df_conciliados = pd.merge(
+                            df_ext_saidas, 
+                            df_sistema, 
+                            on=['CHAVE_DATA', 'CHAVE_VALOR'], 
+                            how='inner'
+                        )
 
-                            # FILTRO SEM FALLBACK (seu caso: débitos são negativos; célula pode estar vermelha com valor exibido positivo)
-                            df_ext_saidas = df_ext[df_ext['Valor_Numerico'] < 0].copy()
-                            df_ext_saidas['Valor_Absoluto'] = df_ext_saidas['Valor_Numerico'].abs()
+                        # Encontrar os NÃO conciliados do extrato
+                        chaves_conciliadas = df_conciliados['CHAVE_DATA'] + df_conciliados['CHAVE_VALOR']
+                        df_ext_saidas['CHAVE_UNICA'] = df_ext_saidas['CHAVE_DATA'] + df_ext_saidas['CHAVE_VALOR']
+                        df_nao_encontrados = df_ext_saidas[~df_ext_saidas['CHAVE_UNICA'].isin(chaves_conciliadas)]
 
-                            if df_ext_saidas.empty:
-                                st.warning(
-                                    "Não foram encontrados débitos (valores negativos) no extrato após a leitura. "
-                                    "Verifique se a coluna de valor selecionada é a correta."
-                                )
-                                st.stop()
+                        # --- 5. EXIBIÇÃO DOS RESULTADOS ---
+                        st.markdown("---")
+                        c1, c2 = st.columns(2)
+                        c1.metric("✅ Despesas Encontradas (Conciliadas)", len(df_conciliados))
+                        c2.metric("⚠️ Despesas NÃO Lançadas no Sistema", len(df_nao_encontrados))
 
-                            # Chaves base do Banco (data + valor absol.)
-                            df_ext_saidas['CHAVE_DATA'] = df_ext_saidas['Data_Formatada'].astype(str).str.strip()
-                            df_ext_saidas['CHAVE_VALOR'] = df_ext_saidas['Valor_Absoluto'].apply(lambda x: "{:.2f}".format(x))
+                        tab_pendentes, tab_ok, tab_debug = st.tabs(["🔴 Pendentes de Lançamento", "🟢 Já Conciliados (Lado a Lado)", "🛠️ Diagnóstico de Erro"])
 
-                            # SEQUÊNCIA PARA DUPLICADOS (BANCO)
-                            df_ext_saidas = adicionar_seq_por_grupo(df_ext_saidas, cols_grupo=['CHAVE_DATA', 'CHAVE_VALOR'], col_seq="SEQ_DUP")
-
-                            # 3) PREPARAÇÃO DOS DADOS DO SISTEMA (Google Sheets)
-                            df_sistema = carregar_dados()
-                            df_sistema = df_sistema[df_sistema['tipo'] == 'Despesa'].copy()
-
-                            if df_sistema.empty:
-                                st.error("Não há despesas no sistema para conciliar.")
-                                st.stop()
-
-                            df_sistema['valor'] = pd.to_numeric(df_sistema['valor'], errors='coerce')
-                            df_sistema['data_liquidacao'] = pd.to_datetime(df_sistema['data_liquidacao'], errors='coerce')
-                            df_sistema = df_sistema.dropna(subset=['valor', 'data_liquidacao']).copy()
-
-                            # Chaves base do Sistema
-                            df_sistema['CHAVE_DATA'] = df_sistema['data_liquidacao'].dt.date.astype(str).str.strip()
-                            df_sistema['CHAVE_VALOR'] = df_sistema['valor'].apply(lambda x: "{:.2f}".format(x))
-
-                            # SEQUÊNCIA PARA DUPLICADOS (SISTEMA)
-                            # Ordenação garante consistência (data_registro como desempate, se existir)
-                            if 'data_registro' in df_sistema.columns:
-                                df_sistema = df_sistema.sort_values(by=['CHAVE_DATA', 'CHAVE_VALOR', 'data_registro'], ascending=True).copy()
+                        with tab_pendentes:
+                            if not df_nao_encontrados.empty:
+                                st.warning("As seguintes despesas constam no extrato do Sicredi, mas não foram achadas no seu sistema:")
+                                view_pendentes = df_nao_encontrados[['Data_Formatada', 'Historico', 'Valor_Absoluto']].copy()
+                                view_pendentes.columns = ['Data Extrato', 'Descrição do Banco', 'Valor (R$)']
+                                view_pendentes['Data Extrato'] = pd.to_datetime(view_pendentes['Data Extrato']).dt.strftime('%d/%m/%Y')
+                                st.dataframe(view_pendentes, use_container_width=True)
                             else:
-                                # fallback estável por índice (ordem atual)
-                                df_sistema = df_sistema.reset_index(drop=False).rename(columns={'index': '_idx_origem'}).copy()
-                                df_sistema = df_sistema.sort_values(by=['CHAVE_DATA', 'CHAVE_VALOR', '_idx_origem'], ascending=True).copy()
+                                st.success("Parabéns! Todas as despesas do extrato estão lançadas no sistema.")
 
-                            df_sistema = adicionar_seq_por_grupo(df_sistema, cols_grupo=['CHAVE_DATA', 'CHAVE_VALOR'], col_seq="SEQ_DUP")
-
-                            # 4) CRUZAMENTO 1:1 (data + valor + sequência)
-                            df_conciliados = pd.merge(
-                                df_ext_saidas,
-                                df_sistema,
-                                on=['CHAVE_DATA', 'CHAVE_VALOR', 'SEQ_DUP'],
-                                how='inner',
-                                suffixes=("_banco", "_sistema")
-                            )
-
-                            # 5) NÃO conciliados (extrato)
-                            df_ext_saidas['CHAVE_UNICA'] = (
-                                df_ext_saidas['CHAVE_DATA'] + "|" +
-                                df_ext_saidas['CHAVE_VALOR'] + "|" +
-                                df_ext_saidas['SEQ_DUP'].astype(str)
-                            )
-
+                        # --- VISUALIZAÇÃO LADO A LADO ---
+                        with tab_ok:
                             if not df_conciliados.empty:
-                                chaves_conciliadas = (
-                                    df_conciliados['CHAVE_DATA'] + "|" +
-                                    df_conciliados['CHAVE_VALOR'] + "|" +
-                                    df_conciliados['SEQ_DUP'].astype(str)
+                                st.success("Estes lançamentos do extrato encontraram seu par perfeito no sistema:")
+                                
+                                view_ok = df_conciliados[[
+                                    'Data_Formatada', 'Historico', 'Valor_Absoluto', # Banco
+                                    'fornecedor', 'categoria' # Sistema
+                                ]].copy()
+                                
+                                view_ok.columns = [
+                                    '📅 Data', '🏦 Histórico (Banco)', '💵 Valor', 
+                                    '🛒 Fornecedor (Sistema)', '📂 Categoria (Sistema)'
+                                ]
+                                
+                                view_ok['📅 Data'] = pd.to_datetime(view_ok['📅 Data']).dt.strftime('%d/%m/%Y')
+
+                                st.dataframe(
+                                    view_ok, 
+                                    use_container_width=True,
+                                    column_config={"💵 Valor": st.column_config.NumberColumn(format="R$ %.2f")},
+                                    hide_index=True
                                 )
                             else:
-                                chaves_conciliadas = pd.Series([], dtype=str)
+                                st.error("Nenhum lançamento foi conciliado. Verifique a aba 'Diagnóstico de Erro'.")
 
-                            df_nao_encontrados = df_ext_saidas[~df_ext_saidas['CHAVE_UNICA'].isin(chaves_conciliadas)].copy()
-
-                            # 6) EXIBIÇÃO DOS RESULTADOS
-                            st.markdown("---")
-                            c1, c2, c3 = st.columns(3)
-                            c1.metric("✅ Despesas Encontradas (Conciliadas)", len(df_conciliados))
-                            c2.metric("⚠️ Despesas NÃO Lançadas no Sistema", len(df_nao_encontrados))
-                            c3.metric("Critério", "Débito (<0) + abs() + sequência (1:1)")
-
-                            tab_pendentes, tab_ok, tab_debug = st.tabs(
-                                ["🔴 Pendentes de Lançamento", "🟢 Já Conciliados (Lado a Lado)", "🛠️ Diagnóstico de Erro"]
-                            )
-
-                            with tab_pendentes:
-                                if not df_nao_encontrados.empty:
-                                    st.warning("As seguintes despesas constam no extrato, mas não foram achadas no seu sistema (por data+valor+sequência):")
-                                    view_pendentes = df_nao_encontrados[['Data_Formatada', 'Historico', 'Valor_Absoluto', 'SEQ_DUP']].copy()
-                                    view_pendentes.columns = ['Data Extrato', 'Descrição do Banco', 'Valor (R$)', 'Seq (dup)']
-                                    view_pendentes['Data Extrato'] = pd.to_datetime(view_pendentes['Data Extrato']).dt.strftime('%d/%m/%Y')
-                                    st.dataframe(view_pendentes, use_container_width=True, hide_index=True)
-                                else:
-                                    st.success("Parabéns! Todas as despesas do extrato estão lançadas no sistema (pelo critério data+valor+sequência).")
-
-                            with tab_ok:
-                                if not df_conciliados.empty:
-                                    st.success("Estes lançamentos do extrato encontraram correspondência 1:1 no sistema:")
-                                    view_ok = df_conciliados[[
-                                        'Data_Formatada', 'Historico', 'Valor_Absoluto', 'SEQ_DUP',
-                                        'fornecedor', 'categoria', 'data_liquidacao', 'valor'
-                                    ]].copy()
-
-                                    view_ok.columns = [
-                                        '📅 Data (Banco)', '🏦 Histórico (Banco)', '💵 Valor (Banco)', '🔢 Seq',
-                                        '🛒 Fornecedor (Sistema)', '📂 Categoria (Sistema)', '📅 Data (Sistema)', '💵 Valor (Sistema)'
-                                    ]
-
-                                    view_ok['📅 Data (Banco)'] = pd.to_datetime(view_ok['📅 Data (Banco)']).dt.strftime('%d/%m/%Y')
-                                    view_ok['📅 Data (Sistema)'] = pd.to_datetime(view_ok['📅 Data (Sistema)']).dt.strftime('%d/%m/%Y')
-
-                                    st.dataframe(
-                                        view_ok,
-                                        use_container_width=True,
-                                        column_config={
-                                            "💵 Valor (Banco)": st.column_config.NumberColumn(format="R$ %.2f"),
-                                            "💵 Valor (Sistema)": st.column_config.NumberColumn(format="R$ %.2f")
-                                        },
-                                        hide_index=True
-                                    )
-                                else:
-                                    st.error("Nenhum lançamento foi conciliado. Verifique a aba 'Diagnóstico de Erro'.")
-
-                            with tab_debug:
-                                st.info("Veja abaixo como as chaves e a sequência estão sendo geradas (Data + Valor + Seq).")
-
-                                col_d1, col_d2 = st.columns(2)
-                                with col_d1:
-                                    st.markdown("##### 🏦 Banco (chaves + sequência)")
-                                    debug_banco = df_ext_saidas[['Data_Formatada', 'Historico', 'Valor', 'Valor_Numerico', 'Valor_Absoluto', 'CHAVE_DATA', 'CHAVE_VALOR', 'SEQ_DUP']].head(15)
-                                    st.dataframe(debug_banco, use_container_width=True, hide_index=True)
-
-                                with col_d2:
-                                    st.markdown("##### 🛒 Sistema (chaves + sequência)")
-                                    cols_debug = ['fornecedor', 'categoria', 'data_liquidacao', 'valor', 'CHAVE_DATA', 'CHAVE_VALOR', 'SEQ_DUP']
-                                    if 'data_registro' in df_sistema.columns:
-                                        cols_debug.insert(0, 'data_registro')
-                                    debug_sys = df_sistema[cols_debug].head(15)
-                                    st.dataframe(debug_sys, use_container_width=True, hide_index=True)
+                        # --- 6. FERRAMENTA DE DIAGNÓSTICO ATUALIZADA ---
+                        with tab_debug:
+                            st.info("💡 **Sucesso na Leitura!** Agora a tabela do Banco está carregando perfeitamente. Veja abaixo como o sistema as está comparando:")
+                            
+                            col_d1, col_d2 = st.columns(2)
+                            with col_d1:
+                                st.markdown("##### 🏦 Como o sistema lê o Banco:")
+                                debug_banco = df_ext_saidas[['Data', 'Historico', 'CHAVE_DATA', 'CHAVE_VALOR']].head(5)
+                                st.dataframe(debug_banco, use_container_width=True)
+                            with col_d2:
+                                st.markdown("##### 🛒 Como o sistema lê o seu Google Sheets:")
+                                debug_sys = df_sistema[['fornecedor', 'categoria', 'CHAVE_DATA', 'CHAVE_VALOR']].head(5)
+                                st.dataframe(debug_sys, use_container_width=True)
 
             except Exception as e:
                 st.error(f"Erro ao processar o arquivo. Detalhe do erro: {e}")
@@ -962,7 +782,7 @@ if check_password():
             df_fornecedores = carregar_fornecedores_df()
             df_editado = st.data_editor(
                 df_fornecedores,
-                num_rows="dynamic",
+                num_rows="dynamic", 
                 column_config={
                     "nome": st.column_config.TextColumn("Nome do Fornecedor", required=True),
                     "cnpj": st.column_config.TextColumn("CNPJ"),
@@ -978,4 +798,3 @@ if check_password():
                 st.success("Lista de fornecedores atualizada com sucesso!")
                 st.cache_data.clear()
                 st.rerun()
-
