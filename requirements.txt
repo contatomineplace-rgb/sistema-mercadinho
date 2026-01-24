@@ -1,9 +1,10 @@
 streamlit
 pandas
+numpy
+
 streamlit-gsheets-connection
 gspread
 google-auth
 
-# Leitura de planilhas:
-openpyxl   # xlsx
-xlrd==2.0.1 # xls
+openpyxl
+xlrd==2.0.1
