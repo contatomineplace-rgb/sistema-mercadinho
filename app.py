@@ -596,49 +596,58 @@ if check_password():
         else:
             st.info("Nenhum dado lançado ainda.")
 
-    # --- ABA: CONCILIAÇÃO BANCÁRIA (SICREDI - DEFINITIVO) ---
+    # --- ABA: CONCILIAÇÃO BANCÁRIA (SICREDI - VERSÃO FINAL BASEADA NO ARQUIVO ORIGINAL) ---
     elif menu == "Conciliação Bancária":
         st.header("🏦 Conciliação Bancária (Sicredi)")
         
         st.markdown("""
         **Como funciona:**
-        1. Exporte o extrato da sua conta Sicredi em formato **Excel (XLS/XLSX)** ou **CSV**.
-        2. Faça o upload do arquivo abaixo. O sistema ignorará o cabeçalho do banco automaticamente.
+        1. Exporte o extrato da sua conta Sicredi.
+        2. Faça o upload do arquivo abaixo. O sistema lerá e comparará automaticamente.
         """)
 
         arquivo_extrato = st.file_uploader("📥 Envie o extrato do Sicredi", type=["csv", "xls", "xlsx"])
 
         if arquivo_extrato is not None:
             try:
-                # FUNÇÃO PARA ENCONTRAR O CABEÇALHO REAL (Ignorando informações da conta)
+                # 1. LEITURA INTELIGENTE BASEADA NO ARQUIVO SICREDI REAL
+                # O arquivo enviado tem um cabeçalho de 8-9 linhas. Vamos encontrar onde começa.
                 skip_lines = 0
                 arquivo_extrato.seek(0)
                 
-                if arquivo_extrato.name.endswith('csv'):
-                    text_data = arquivo_extrato.getvalue().decode('latin1', errors='ignore')
-                    lines = text_data.splitlines()
-                    for i, line in enumerate(lines):
-                        if 'Data' in line and ('Valor' in line or 'Histórico' in line):
-                            skip_lines = i
-                            break
-                    arquivo_extrato.seek(0)
-                    df_extrato = pd.read_csv(arquivo_extrato, sep=';', encoding='latin1', skiprows=skip_lines)
-                else:
-                    df_extrato = pd.read_excel(arquivo_extrato)
-                    if 'Data' not in df_extrato.columns and 'DATA' not in df_extrato.columns:
+                # Para arquivos CSV (ou XLS falso gerado pelo sistema)
+                text_data = arquivo_extrato.getvalue().decode('latin1', errors='ignore')
+                lines = text_data.splitlines()
+                for i, line in enumerate(lines):
+                    if 'Data' in line and ('Descrição' in line or 'Histórico' in line):
+                        skip_lines = i
+                        break
+                
+                # Recarrega o arquivo pulando as linhas inúteis do cabeçalho
+                arquivo_extrato.seek(0)
+                if arquivo_extrato.name.endswith('csv') or arquivo_extrato.name.endswith('xls'):
+                    # O Sicredi muitas vezes exporta CSV com extensão XLS. O read_csv com separador correto resolve.
+                    # Pelo arquivo de amostra, o separador pode ser vírgula ou ponto e vírgula. Vamos tentar os dois.
+                    try:
+                        df_extrato = pd.read_csv(arquivo_extrato, sep=',', encoding='latin1', skiprows=skip_lines)
+                    except:
                         arquivo_extrato.seek(0)
-                        df_extrato = pd.read_excel(arquivo_extrato, skiprows=7)
+                        df_extrato = pd.read_csv(arquivo_extrato, sep=';', encoding='latin1', skiprows=skip_lines)
+                else:
+                    df_extrato = pd.read_excel(arquivo_extrato, skiprows=skip_lines)
 
                 # Limpeza Padrão das Colunas
                 df_extrato.columns = df_extrato.columns.str.strip()
                 df_extrato.dropna(how='all', inplace=True)
 
+                # 2. SELEÇÃO DAS COLUNAS (AJUSTADO PARA O SEU ARQUIVO)
                 col1, col2, col3 = st.columns(3)
                 colunas_extrato = list(df_extrato.columns)
                 
+                # As colunas exatas do seu arquivo são: "Data", "Descrição", "Valor (R$)"
                 idx_data = colunas_extrato.index('Data') if 'Data' in colunas_extrato else 0
-                idx_hist = colunas_extrato.index('Histórico') if 'Histórico' in colunas_extrato else 0
-                idx_valor = colunas_extrato.index('Valor') if 'Valor' in colunas_extrato else 0
+                idx_hist = colunas_extrato.index('Descrição') if 'Descrição' in colunas_extrato else (colunas_extrato.index('Histórico') if 'Histórico' in colunas_extrato else 0)
+                idx_valor = colunas_extrato.index('Valor (R$)') if 'Valor (R$)' in colunas_extrato else (colunas_extrato.index('Valor') if 'Valor' in colunas_extrato else 0)
 
                 with col1: col_data = st.selectbox("Coluna de Data", colunas_extrato, index=idx_data)
                 with col2: col_hist = st.selectbox("Coluna de Histórico/Descrição", colunas_extrato, index=idx_hist)
@@ -647,36 +656,35 @@ if check_password():
                 if st.button("🔍 Iniciar Conciliação", type="primary"):
                     with st.spinner("Comparando lançamentos com 100% de precisão..."):
                         
-                        # --- 1. PREPARAÇÃO DOS DADOS DO BANCO ---
+                        # --- 3. PREPARAÇÃO DOS DADOS DO BANCO ---
                         df_ext = df_extrato[[col_data, col_hist, col_valor]].copy()
                         df_ext.columns = ['Data', 'Historico', 'Valor']
                         
-                        # Tratamento da Data e Valor
+                        # CORREÇÃO CRÍTICA: Os valores do seu banco JÁ USAM PONTO para centavos (ex: -1407.4)
+                        # Não podemos remover o ponto! Apenas convertemos diretamente para numérico.
                         df_ext['Data_Formatada'] = pd.to_datetime(df_ext['Data'], dayfirst=True, errors='coerce').dt.date
-                        df_ext['Valor_Numerico'] = df_ext['Valor'].astype(str).str.replace('R$', '').str.replace('.', '', regex=False).str.replace(',', '.')
-                        df_ext['Valor_Numerico'] = pd.to_numeric(df_ext['Valor_Numerico'], errors='coerce')
+                        df_ext['Valor_Numerico'] = pd.to_numeric(df_ext['Valor'], errors='coerce')
                         
-                        # Filtra apenas as SAÍDAS (Valores Negativos)
+                        # Filtra apenas as SAÍDAS (Valores Negativos) e remove a linha de "Saldo Anterior"
                         df_ext_saidas = df_ext[df_ext['Valor_Numerico'] < 0].dropna(subset=['Data_Formatada', 'Valor_Numerico']).copy()
                         df_ext_saidas['Valor_Absoluto'] = df_ext_saidas['Valor_Numerico'].abs() 
 
-                        # O SEGREDO ESTÁ AQUI: Criação das "Chaves Textuais Estritas"
+                        # Criação das "Chaves Textuais" para bater com o sistema
                         df_ext_saidas['CHAVE_DATA'] = df_ext_saidas['Data_Formatada'].astype(str).str.strip()
-                        # Força o número a ser um texto com exatas 2 casas decimais (Ex: "150.00")
                         df_ext_saidas['CHAVE_VALOR'] = df_ext_saidas['Valor_Absoluto'].apply(lambda x: "{:.2f}".format(x))
 
 
-                        # --- 2. PREPARAÇÃO DOS DADOS DO SISTEMA ---
+                        # --- 4. PREPARAÇÃO DOS DADOS DO SISTEMA ---
                         df_sistema = carregar_dados()
                         df_sistema = df_sistema[df_sistema['tipo'] == 'Despesa'].copy()
                         df_sistema['valor'] = pd.to_numeric(df_sistema['valor'])
                         
-                        # O SEGREDO ESTÁ AQUI: Criação das "Chaves Textuais Estritas" para o sistema
+                        # Criação das "Chaves Textuais" do sistema
                         df_sistema['CHAVE_DATA'] = pd.to_datetime(df_sistema['data_liquidacao']).dt.date.astype(str).str.strip()
                         df_sistema['CHAVE_VALOR'] = df_sistema['valor'].apply(lambda x: "{:.2f}".format(x))
 
 
-                        # --- 3. O CRUZAMENTO EXATO (MERGE) ---
+                        # --- 5. O CRUZAMENTO EXATO (MERGE) ---
                         df_conciliados = pd.merge(
                             df_ext_saidas, 
                             df_sistema, 
@@ -689,7 +697,7 @@ if check_password():
                         df_ext_saidas['CHAVE_UNICA'] = df_ext_saidas['CHAVE_DATA'] + df_ext_saidas['CHAVE_VALOR']
                         df_nao_encontrados = df_ext_saidas[~df_ext_saidas['CHAVE_UNICA'].isin(chaves_conciliadas)]
 
-                        # --- 4. EXIBIÇÃO DOS RESULTADOS ---
+                        # --- 6. EXIBIÇÃO DOS RESULTADOS ---
                         st.markdown("---")
                         c1, c2 = st.columns(2)
                         c1.metric("✅ Despesas Encontradas (Conciliadas)", len(df_conciliados))
@@ -707,7 +715,7 @@ if check_password():
                             else:
                                 st.success("Parabéns! Todas as despesas do extrato estão lançadas no sistema.")
 
-                        # --- VISUALIZAÇÃO LADO A LADO ---
+                        # --- VISUALIZAÇÃO LADO A LADO CORRIGIDA ---
                         with tab_ok:
                             if not df_conciliados.empty:
                                 st.success("Estes lançamentos do extrato encontraram seu par perfeito no sistema:")
@@ -733,7 +741,7 @@ if check_password():
                             else:
                                 st.error("Nenhum lançamento foi conciliado. Verifique a aba 'Diagnóstico de Erro'.")
 
-                        # --- 5. FERRAMENTA DE DIAGNÓSTICO PARA O USUÁRIO ---
+                        # --- 7. FERRAMENTA DE DIAGNÓSTICO ---
                         with tab_debug:
                             st.info("💡 **Por que não conciliou?** Compare a forma como o computador está lendo os dados abaixo. Se a 'Chave' do Banco for diferente da 'Chave' do Sistema, a conciliação não ocorre.")
                             
