@@ -1,10 +1,9 @@
-streamlit>=1.28
-pandas>=2.0
-numpy>=1.24
+streamlit
+pandas
+streamlit-gsheets-connection
+gspread
+google-auth
 
-st-gsheets-connection>=0.1.4
-gspread>=5.12
-google-auth>=2.0
-
-openpyxl>=3.1
-xlrd>=2.0.1
+# Leitura de planilhas:
+openpyxl   # xlsx
+xlrd==2.0.1 # xls
