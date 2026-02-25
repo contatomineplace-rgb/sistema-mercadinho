@@ -689,7 +689,7 @@ if check_password():
         
         st.markdown("""
         **Como funciona:**
-        Exporte o extrato da sua conta bancária (Sicredi, Itaú, Nubank, etc) no formato **.ofx** e faça o upload abaixo.
+        Exporte o extrato da sua conta bancária no formato **.ofx** e faça o upload abaixo.
         O sistema identificará automaticamente as saídas e as cruzará com as despesas cadastradas no sistema.
         """)
 
@@ -698,32 +698,21 @@ if check_password():
         if arquivo_ofx is not None:
             with st.spinner("Analisando e processando arquivo OFX..."):
                 try:
-                    # 1. Lógica de Leitura Robusta do OFX
                     conteudo = arquivo_ofx.getvalue().decode('latin1', errors='ignore')
-                    
-                    # Usa expressões regulares (Regex) para encontrar os blocos de transação (STMTTRN)
                     transacoes = re.findall(r'<STMTTRN>(.*?)</STMTTRN>', conteudo, re.DOTALL)
                     
                     dados_extrato = []
                     for t in transacoes:
-                        # Extrai a Data (<DTPOSTED>YYYYMMDD)
                         dt_match = re.search(r'<DTPOSTED>(\d{8})', t)
                         data_str = dt_match.group(1) if dt_match else None
-                        
-                        # Extrai o Valor (<TRNAMT>-150.00)
                         val_match = re.search(r'<TRNAMT>([\-\d\.]+)', t)
                         valor_str = val_match.group(1) if val_match else None
-                        
-                        # Extrai a Descrição (<MEMO> ou <NAME>)
                         memo_match = re.search(r'<MEMO>(.*?)(?:<|\r|\n)', t)
                         name_match = re.search(r'<NAME>(.*?)(?:<|\r|\n)', t)
                         
-                        if memo_match:
-                            desc = memo_match.group(1).strip()
-                        elif name_match:
-                            desc = name_match.group(1).strip()
-                        else:
-                            desc = "Sem descrição"
+                        if memo_match: desc = memo_match.group(1).strip()
+                        elif name_match: desc = name_match.group(1).strip()
+                        else: desc = "Sem descrição"
                         
                         if data_str and valor_str:
                             data_obj = datetime.strptime(data_str, '%Y%m%d').date()
@@ -737,38 +726,23 @@ if check_password():
                     df_extrato = pd.DataFrame(dados_extrato)
 
                     if not df_extrato.empty:
-                        # --- 2. PREPARAÇÃO DOS DADOS DO BANCO ---
-                        # Pega apenas valores NEGATIVOS (Saídas de dinheiro/Despesas)
                         df_ext_saidas = df_extrato[df_extrato['Valor'] < 0].copy()
                         df_ext_saidas['Valor_Absoluto'] = df_ext_saidas['Valor'].abs() 
-
-                        # Criação das chaves precisas de comparação para o Banco
                         df_ext_saidas['CHAVE_DATA'] = df_ext_saidas['Data'].astype(str).str.strip()
                         df_ext_saidas['CHAVE_VALOR'] = df_ext_saidas['Valor_Absoluto'].apply(lambda x: "{:.2f}".format(x))
 
-                        # --- 3. PREPARAÇÃO DOS DADOS DO SISTEMA ---
                         df_sistema = carregar_dados()
                         df_sistema = df_sistema[df_sistema['tipo'] == 'Despesa'].copy()
                         df_sistema['valor'] = pd.to_numeric(df_sistema['valor'])
                         
-                        # Criação das chaves precisas de comparação para o Sistema
                         df_sistema['CHAVE_DATA'] = pd.to_datetime(df_sistema['data_liquidacao']).dt.date.astype(str).str.strip()
                         df_sistema['CHAVE_VALOR'] = df_sistema['valor'].apply(lambda x: "{:.2f}".format(x))
 
-                        # --- 4. O CRUZAMENTO EXATO (MERGE) ---
-                        df_conciliados = pd.merge(
-                            df_ext_saidas, 
-                            df_sistema, 
-                            on=['CHAVE_DATA', 'CHAVE_VALOR'], 
-                            how='inner'
-                        )
-
-                        # Encontra os NÂO conciliados (O que tem no OFX mas não está no Sistema)
+                        df_conciliados = pd.merge(df_ext_saidas, df_sistema, on=['CHAVE_DATA', 'CHAVE_VALOR'], how='inner')
                         chaves_conciliadas = df_conciliados['CHAVE_DATA'] + df_conciliados['CHAVE_VALOR']
                         df_ext_saidas['CHAVE_UNICA'] = df_ext_saidas['CHAVE_DATA'] + df_ext_saidas['CHAVE_VALOR']
                         df_nao_encontrados = df_ext_saidas[~df_ext_saidas['CHAVE_UNICA'].isin(chaves_conciliadas)]
 
-                        # --- 5. EXIBIÇÃO DOS RESULTADOS ---
                         st.markdown("---")
                         c1, c2 = st.columns(2)
                         c1.metric("✅ Despesas Encontradas (Conciliadas)", len(df_conciliados))
@@ -778,35 +752,95 @@ if check_password():
 
                         with tab_pendentes:
                             if not df_nao_encontrados.empty:
-                                st.warning("Atenção! As seguintes saídas constam no extrato do Banco, mas NÃO foram localizadas no seu Sistema de Mercadinho:")
-                                view_pendentes = df_nao_encontrados[['Data', 'Historico', 'Valor_Absoluto']].copy()
-                                view_pendentes.columns = ['Data Extrato', 'Descrição do Banco', 'Valor (R$)']
-                                view_pendentes['Data Extrato'] = pd.to_datetime(view_pendentes['Data Extrato']).dt.strftime('%d/%m/%Y')
-                                st.dataframe(view_pendentes, use_container_width=True)
+                                st.warning("Atenção! As seguintes saídas constam no extrato do Banco, mas NÃO foram localizadas no seu Sistema. Preencha os dados abaixo e marque a caixinha para registrá-las.")
+                                
+                                # Prepara a tabela de pendentes para edição
+                                mes_atual = MESES_PT[datetime.today().month]
+                                ano_atual = str(datetime.today().year)
+                                lista_anos = gerar_lista_anos()
+
+                                df_edit_pendentes = df_nao_encontrados[['Data', 'Historico', 'Valor_Absoluto']].copy()
+                                df_edit_pendentes.columns = ['Data Extrato', 'Descrição do Banco', 'Valor (R$)']
+
+                                df_edit_pendentes.insert(0, "Lançar?", False)
+                                df_edit_pendentes['Mês Comp.'] = mes_atual
+                                df_edit_pendentes['Ano Comp.'] = ano_atual
+                                df_edit_pendentes['Fornecedor'] = ""
+                                df_edit_pendentes['Categoria'] = "Outros"
+                                df_edit_pendentes['Observação'] = ""
+
+                                edited_pendentes = st.data_editor(
+                                    df_edit_pendentes,
+                                    use_container_width=True,
+                                    hide_index=True,
+                                    column_config={
+                                        "Lançar?": st.column_config.CheckboxColumn("Lançar?", required=True),
+                                        "Data Extrato": st.column_config.DateColumn("Data Extrato", format="DD/MM/YYYY", disabled=True),
+                                        "Descrição do Banco": st.column_config.TextColumn("Descrição do Banco", disabled=True),
+                                        "Valor (R$)": st.column_config.NumberColumn("Valor (R$)", format="R$ %.2f", disabled=True),
+                                        "Mês Comp.": st.column_config.SelectboxColumn("Mês Comp.", options=list(MESES_PT.values()), required=True),
+                                        "Ano Comp.": st.column_config.SelectboxColumn("Ano Comp.", options=lista_anos, required=True),
+                                        "Fornecedor": st.column_config.TextColumn("Fornecedor (Digite)", required=True),
+                                        "Categoria": st.column_config.SelectboxColumn("Classificação", options=CATEGORIAS, required=True),
+                                        "Observação": st.column_config.TextColumn("Observação")
+                                    }
+                                )
+
+                                if st.button("💾 Lançar Despesas Selecionadas", type="primary"):
+                                    linhas_marcadas = edited_pendentes[edited_pendentes["Lançar?"] == True]
+
+                                    if linhas_marcadas.empty:
+                                        st.warning("Selecione pelo menos uma despesa marcando a caixinha 'Lançar?'.")
+                                    else:
+                                        df_forn_atual = carregar_fornecedores_df()
+                                        nomes_forn_existentes = set(df_forn_atual['nome'].str.lower().values)
+                                        lista_dados_finais = []
+                                        erro_encontrado = False
+
+                                        for index, row in linhas_marcadas.iterrows():
+                                            if not row['Fornecedor'] or str(row['Fornecedor']).strip() == "":
+                                                st.error(f"⚠️ Preencha o nome do Fornecedor para a despesa de R$ {row['Valor (R$)']:.2f} ({row['Descrição do Banco']})")
+                                                erro_encontrado = True
+                                                continue
+
+                                            nome_forn = str(row['Fornecedor']).strip()
+                                            if nome_forn.lower() not in nomes_forn_existentes:
+                                                salvar_fornecedor_rapido(nome_forn)
+                                                nomes_forn_existentes.add(nome_forn.lower())
+
+                                            mes_num = MESES_PT_INV[row['Mês Comp.']]
+                                            comp_fmt = f"{row['Ano Comp.']}-{mes_num:02d}"
+
+                                            dados_linha = {
+                                                "data_registro": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                                "tipo": "Despesa",
+                                                "valor": row['Valor (R$)'],
+                                                "fornecedor": nome_forn,
+                                                "data_liquidacao": pd.to_datetime(row['Data Extrato']).strftime("%Y-%m-%d"),
+                                                "competencia": comp_fmt,
+                                                "status": "Pago", # Veio do extrato, logo está pago
+                                                "categoria": row['Categoria'],
+                                                "observacao": str(row['Observação']) if pd.notna(row['Observação']) else ""
+                                            }
+                                            lista_dados_finais.append(dados_linha)
+
+                                        if lista_dados_finais and not erro_encontrado:
+                                            salvar_lote_lancamentos(pd.DataFrame(lista_dados_finais))
+                                            st.success(f"🎉 {len(lista_dados_finais)} despesa(s) lançada(s) com sucesso!")
+                                            time.sleep(2)
+                                            st.cache_data.clear()
+                                            st.rerun()
+
                             else:
                                 st.success("🎉 Sensacional! Todas as despesas de saída identificadas neste extrato bancário já estão devidamente lançadas no sistema.")
 
                         with tab_ok:
                             if not df_conciliados.empty:
                                 st.success("As despesas abaixo foram localizadas tanto no extrato bancário quanto no seu sistema:")
-                                view_ok = df_conciliados[[
-                                    'Data', 'Historico', 'Valor_Absoluto', 
-                                    'fornecedor', 'categoria' 
-                                ]].copy()
-                                
-                                view_ok.columns = [
-                                    '📅 Data', '🏦 Histórico (Banco)', '💵 Valor', 
-                                    '🛒 Fornecedor (Sistema)', '📂 Categoria (Sistema)'
-                                ]
-                                
+                                view_ok = df_conciliados[['Data', 'Historico', 'Valor_Absoluto', 'fornecedor', 'categoria']].copy()
+                                view_ok.columns = ['📅 Data', '🏦 Histórico (Banco)', '💵 Valor', '🛒 Fornecedor (Sistema)', '📂 Categoria (Sistema)']
                                 view_ok['📅 Data'] = pd.to_datetime(view_ok['📅 Data']).dt.strftime('%d/%m/%Y')
-
-                                st.dataframe(
-                                    view_ok, 
-                                    use_container_width=True,
-                                    column_config={"💵 Valor": st.column_config.NumberColumn(format="R$ %.2f")},
-                                    hide_index=True
-                                )
+                                st.dataframe(view_ok, use_container_width=True, column_config={"💵 Valor": st.column_config.NumberColumn(format="R$ %.2f")}, hide_index=True)
                             else:
                                 st.error("Nenhum lançamento foi conciliado. (Talvez o arquivo anexado não contemple os dias das despesas lançadas).")
                     
