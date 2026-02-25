@@ -15,7 +15,8 @@ CATEGORIAS = [
     "Salário", "13° Salário", "Férias", "Simples Nacional", "INSS", "FGTS",
     "Internet", "Celular", "Locação", "Tarifa Bancária",
     "Integralização de Capital em Banco", "Cesta de Relacionamento de Banco",
-    "Cartão de Crédito", "Empréstimo", "Consórcio", "Sistemas", "Outros", "Vendas"
+    "Cartão de Crédito", "Empréstimo", "Consórcio", "Sistemas", 
+    "Vale Alimentação", "Mão de obra", "Outros", "Vendas"
 ]
 
 # Dicionário de Meses
@@ -28,16 +29,20 @@ MESES_PT_INV = {v: k for k, v in MESES_PT.items()}
 # --- CONEXÃO COM O GOOGLE SHEETS ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
+# --- FUNÇÕES DE DADOS COM CACHE ATIVADO (CORREÇÃO DO BUG) ---
 def carregar_dados():
     try:
-        df = conn.read(worksheet="lancamentos", ttl=0)
+        # ttl=600 cria um cache de 10 minutos. Evita que o Google bloqueie o sistema por excesso de requisições.
+        df = conn.read(worksheet="lancamentos", ttl=600)
         return df
-    except:
+    except Exception as e:
+        st.error(f"Erro de conexão com o banco de dados (Lançamentos): {e}")
         return pd.DataFrame()
 
 def carregar_fornecedores_df():
     try:
-        df = conn.read(worksheet="fornecedores", ttl=0)
+        # ttl=600 para fornecedores também
+        df = conn.read(worksheet="fornecedores", ttl=600)
         colunas_necessarias = ['nome', 'cnpj', 'telefone', 'login_app', 'senha_app']
         for col in colunas_necessarias:
             if col not in df.columns:
@@ -45,17 +50,19 @@ def carregar_fornecedores_df():
         df = df.fillna("")
         df = df.astype(str)
         return df
-    except:
+    except Exception as e:
+        st.error(f"Erro de conexão com o banco de dados (Fornecedores): {e}")
         return pd.DataFrame(columns=['nome', 'cnpj', 'telefone', 'login_app', 'senha_app'])
 
 def carregar_lista_nomes_fornecedores():
     df = carregar_fornecedores_df()
     return df['nome'].dropna().unique().tolist()
 
+# Nas funções de escrita (salvar, editar, excluir), o ttl=0 é mantido para garantir precisão antes de gravar.
 def salvar_fornecedor_rapido(novo_nome):
     try:
-        df = carregar_fornecedores_df()
-        if novo_nome and novo_nome.strip().lower() not in df['nome'].str.lower().values:
+        df = conn.read(worksheet="fornecedores", ttl=0)
+        if novo_nome and novo_nome.strip().lower() not in df['nome'].dropna().str.lower().values:
             novo_registro = pd.DataFrame([{
                 "nome": novo_nome, "cnpj": "", "telefone": "", "login_app": "", "senha_app": ""
             }])
@@ -105,6 +112,7 @@ def editar_lancamento(indice, novos_dados):
     except Exception as e:
         st.error(f"Erro ao editar: {e}")
 
+# --- FUNÇÕES AUXILIARES ---
 def gerar_lista_anos():
     ano_atual = datetime.now().year
     return [str(ano) for ano in range(2025, ano_atual + 3)]
@@ -272,7 +280,7 @@ if check_password():
                     st.session_state["memoria_ano"] = ano_selecionado
                     st.session_state["memoria_data_liq"] = data_liq
                     st.session_state["limpar_despesa_agora"] = True
-                    st.cache_data.clear()
+                    st.cache_data.clear() # Limpa o cache para carregar os dados novos na próxima tela
                     st.rerun()
 
         # === 2. LANÇAMENTO EM LOTE ===
@@ -754,7 +762,6 @@ if check_password():
                             if not df_nao_encontrados.empty:
                                 st.warning("Atenção! As seguintes saídas constam no extrato do Banco, mas NÃO foram localizadas no seu Sistema. Preencha os dados abaixo e marque a caixinha para registrá-las.")
                                 
-                                # Prepara a tabela de pendentes para edição
                                 mes_atual = MESES_PT[datetime.today().month]
                                 ano_atual = str(datetime.today().year)
                                 lista_anos = gerar_lista_anos()
@@ -818,7 +825,7 @@ if check_password():
                                                 "fornecedor": nome_forn,
                                                 "data_liquidacao": pd.to_datetime(row['Data Extrato']).strftime("%Y-%m-%d"),
                                                 "competencia": comp_fmt,
-                                                "status": "Pago", # Veio do extrato, logo está pago
+                                                "status": "Pago", 
                                                 "categoria": row['Categoria'],
                                                 "observacao": str(row['Observação']) if pd.notna(row['Observação']) else ""
                                             }
