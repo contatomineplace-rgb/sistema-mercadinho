@@ -100,7 +100,6 @@ def excluir_lancamentos(indices_para_excluir):
 def editar_lancamento(indice, novos_dados):
     try:
         df = conn.read(worksheet="lancamentos", ttl=0)
-        # Atualiza apenas a linha e colunas específicas
         for chave, valor in novos_dados.items():
             df.at[indice, chave] = valor
         conn.update(worksheet="lancamentos", data=df)
@@ -138,26 +137,19 @@ def atualizar_data_liq():
 
 # --- FUNÇÕES DE AUTENTICAÇÃO E LOGIN ---
 def gerar_token_auth():
-    """Gera um token seguro baseado nas credenciais do arquivo secrets"""
     email_secreto = st.secrets["login"]["email"]
     senha_secreta = st.secrets["login"]["senha"]
-    # Cria um hash SHA-256 combinando email, senha e um texto base para segurança
     texto_base = email_secreto + senha_secreta + "mercadinho_seguro_2026"
     return hashlib.sha256(texto_base.encode()).hexdigest()
 
 def check_password():
     token_esperado = gerar_token_auth()
-
-    # 1. Verifica se já está logado na sessão atual
     if st.session_state.get("password_correct", False):
         return True
-
-    # 2. Verifica se a URL contém o token correto (sobrevive ao F5/Refresh)
     if st.query_params.get("auth") == token_esperado:
         st.session_state["password_correct"] = True
         return True
 
-    # 3. Se não estiver logado, exibe a tela de login
     st.markdown("## 🔐 Acesso Restrito")
     col1, col2 = st.columns([1, 2])
     with col1:
@@ -168,7 +160,6 @@ def check_password():
             user_pass = st.secrets["login"]["senha"]
             if email == user_email and password == user_pass:
                 st.session_state["password_correct"] = True
-                # Salva o token na URL para que o login persista após o refresh
                 st.query_params["auth"] = token_esperado
                 st.rerun()
             else:
@@ -183,7 +174,12 @@ if check_password():
     # --- ABA: LANÇAR DESPESA ---
     if menu == "Lançar Despesa":
         st.header("📉 Gestão de Despesas")
-        tab_individual, tab_lote, tab_editar_excluir = st.tabs(["📝 Individual", "📚 Despesa em Lote", "✏️ Editar ou Excluir Despesa"])
+        tab_individual, tab_lote, tab_importar, tab_editar_excluir = st.tabs([
+            "📝 Individual", 
+            "📚 Despesa em Lote", 
+            "📥 Importar Planilha", 
+            "✏️ Editar ou Excluir"
+        ])
 
         # === 1. LANÇAMENTO INDIVIDUAL ===
         with tab_individual:
@@ -348,7 +344,108 @@ if check_password():
                     elif not lista_dados_finais and not erro_encontrado:
                         st.warning("Nenhuma linha preenchida para salvar.")
 
-        # === 3. EDITAR OU EXCLUIR DESPESA ===
+        # === 3. IMPORTAR PLANILHA (NOVA ABA) ===
+        with tab_importar:
+            st.subheader("📥 Importar Lançamentos via Planilha (Excel)")
+            
+            st.info("""
+            **Siga o padrão abaixo para a sua planilha Excel:**
+            A primeira linha deve conter EXATAMENTE os seguintes cabeçalhos (nomes das colunas em minúsculo):
+            
+            1. **`valor`**: Apenas números e vírgula (ex: 1500,50).
+            2. **`data_liquidacao`**: Formato DD/MM/AAAA (ex: 25/01/2026).
+            3. **`mes_competencia`**: Nome do mês por extenso (ex: Janeiro).
+            4. **`ano_competencia`**: Ano com 4 dígitos (ex: 2026).
+            5. **`fornecedor`**: Nome do fornecedor (novos serão cadastrados automaticamente).
+            6. **`categoria`**: Classificação (ex: Mercadoria, Celular, etc).
+            7. **`status`**: Preencher com 'Pago' ou 'A Pagar'.
+            8. **`observacao`**: Opcional.
+            """)
+
+            arquivo_importacao = st.file_uploader("📂 Arraste ou selecione a planilha (.xlsx)", type=["xlsx"])
+
+            if arquivo_importacao is not None:
+                if st.button("🚀 Processar e Importar Planilha", type="primary"):
+                    try:
+                        # Lê o arquivo enviado
+                        df_import = pd.read_excel(arquivo_importacao)
+
+                        # Verifica se as colunas essenciais existem
+                        colunas_esperadas = ['valor', 'data_liquidacao', 'mes_competencia', 'ano_competencia', 'fornecedor']
+                        colunas_faltantes = [c for c in colunas_esperadas if c not in df_import.columns.str.lower()]
+
+                        if colunas_faltantes:
+                            st.error(f"⚠️ Erro: Faltam as seguintes colunas obrigatórias na sua planilha: {', '.join(colunas_faltantes)}")
+                        else:
+                            with st.spinner("Processando dados e cadastrando novos fornecedores..."):
+                                df_import.columns = df_import.columns.str.lower() # Padroniza minúsculo
+                                
+                                df_forn_atual = carregar_fornecedores_df()
+                                nomes_forn_existentes = set(df_forn_atual['nome'].dropna().str.lower().values)
+                                lista_dados_finais = []
+
+                                for index, row in df_import.iterrows():
+                                    if pd.isna(row.get('fornecedor')) or pd.isna(row.get('valor')):
+                                        continue 
+
+                                    # 1. Tratamento do Fornecedor
+                                    nome_forn = str(row['fornecedor']).strip()
+                                    if nome_forn.lower() not in nomes_forn_existentes:
+                                        salvar_fornecedor_rapido(nome_forn)
+                                        nomes_forn_existentes.add(nome_forn.lower())
+
+                                    # 2. Tratamento do Valor
+                                    valor_float = converter_moeda_br_para_float(row['valor'])
+
+                                    # 3. Tratamento da Competência
+                                    mes_nome = str(row['mes_competencia']).strip().capitalize()
+                                    ano = str(row['ano_competencia']).strip().replace(".0", "") # Remove ".0" se vier como float
+                                    
+                                    if mes_nome in MESES_PT_INV:
+                                        mes_num = MESES_PT_INV[mes_nome]
+                                        comp_fmt = f"{ano}-{mes_num:02d}"
+                                    else:
+                                        comp_fmt = f"{ano}-01" # Default seguro
+
+                                    # 4. Tratamento de Data de Liquidação
+                                    try:
+                                        data_fmt = pd.to_datetime(row['data_liquidacao'], dayfirst=True).strftime("%Y-%m-%d")
+                                    except:
+                                        data_fmt = datetime.now().strftime("%Y-%m-%d") # Default em caso de erro
+
+                                    # 5. Tratamento de outras colunas
+                                    status_str = str(row.get('status', 'Pago')).strip()
+                                    if status_str.lower() not in ['pago', 'a pagar']: status_str = 'Pago'
+
+                                    cat_str = str(row.get('categoria', 'Outros')).strip()
+                                    obs_str = str(row.get('observacao', '')) if pd.notna(row.get('observacao')) else ""
+
+                                    dados_linha = {
+                                        "data_registro": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                        "tipo": "Despesa",
+                                        "valor": valor_float,
+                                        "fornecedor": nome_forn,
+                                        "data_liquidacao": data_fmt,
+                                        "competencia": comp_fmt,
+                                        "status": status_str,
+                                        "categoria": cat_str,
+                                        "observacao": obs_str
+                                    }
+                                    lista_dados_finais.append(dados_linha)
+
+                                if lista_dados_finais:
+                                    salvar_lote_lancamentos(pd.DataFrame(lista_dados_finais))
+                                    st.success(f"🎉 Sucesso! {len(lista_dados_finais)} despesas foram importadas para o banco de dados.")
+                                    time.sleep(3)
+                                    st.cache_data.clear()
+                                    st.rerun()
+                                else:
+                                    st.warning("Nenhuma despesa válida encontrada. Verifique se as células de fornecedor e valor estão preenchidas.")
+                    
+                    except Exception as e:
+                        st.error(f"Erro ao ler a planilha. Detalhe técnico: {e}")
+
+        # === 4. EDITAR OU EXCLUIR DESPESA ===
         with tab_editar_excluir:
             st.subheader("🔍 Localizar, Editar ou Excluir")
             df_dados = carregar_dados()
@@ -597,7 +694,7 @@ if check_password():
         else:
             st.info("Nenhum dado lançado ainda.")
 
-    # --- ABA: CONCILIAÇÃO BANCÁRIA (SICREDI - LEITURA SOB MEDIDA) ---
+    # --- ABA: CONCILIAÇÃO BANCÁRIA (SICREDI) ---
     elif menu == "Conciliação Bancária":
         st.header("🏦 Conciliação Bancária (Sicredi)")
         
@@ -611,36 +708,26 @@ if check_password():
 
         if arquivo_extrato is not None:
             try:
-                # =========================================================================
-                # 1. LEITOR SOB MEDIDA PARA O ARQUIVO DO SICREDI
-                # Ignora quebras de linha e vírgulas fantasmas do banco
-                # =========================================================================
                 arquivo_extrato.seek(0)
                 text_data = arquivo_extrato.getvalue().decode('latin1', errors='ignore')
                 lines = text_data.splitlines()
 
-                # Acha a linha do cabeçalho
                 header_idx = 0
                 for i, line in enumerate(lines):
                     if 'Data' in line and ('Descrição' in line or 'Histórico' in line) and 'Valor' in line:
                         header_idx = i
                         break
 
-                # Identifica se o arquivo usa vírgula ou ponto e vírgula
                 delimiter = ';' if ';' in lines[header_idx] else ','
-
-                # Lê o arquivo usando o leitor nativo do Python (imune a erros de formatação)
                 reader = csv.reader(lines[header_idx:], delimiter=delimiter)
                 parsed_data = [row for row in reader]
 
                 if len(parsed_data) > 1:
                     header = parsed_data[0]
-                    # Garante que a "Descrição" não roube espaço das outras colunas se houver vírgula extra
                     clean_data = []
                     max_cols = len(header)
                     for row in parsed_data[1:]:
                         if len(row) > max_cols:
-                            # Se a linha quebrou, junta o texto excedente na descrição
                             desc = " - ".join(row[1 : 1 + (len(row) - max_cols + 1)])
                             rest = row[1 + (len(row) - max_cols + 1) :]
                             row = [row[0], desc] + rest
@@ -650,11 +737,8 @@ if check_password():
                 else:
                     df_extrato = pd.DataFrame()
 
-                # Limpeza final dos nomes das colunas
                 df_extrato.columns = df_extrato.columns.str.strip()
                 df_extrato.dropna(how='all', inplace=True)
-
-                # =========================================================================
 
                 col1, col2, col3 = st.columns(3)
                 colunas_extrato = list(df_extrato.columns)
@@ -670,58 +754,41 @@ if check_password():
                 if st.button("🔍 Iniciar Conciliação", type="primary"):
                     with st.spinner("Comparando lançamentos com 100% de precisão..."):
                         
-                        # --- 2. PREPARAÇÃO DOS DADOS DO BANCO ---
                         df_ext = df_extrato[[col_data, col_hist, col_valor]].copy()
                         df_ext.columns = ['Data', 'Historico', 'Valor']
                         
-                        # Converte a Data
                         df_ext['Data_Formatada'] = pd.to_datetime(df_ext['Data'], dayfirst=True, errors='coerce').dt.date
-                        # Converte o Valor (agora ele lê os pontos originais do arquivo)
                         df_ext['Valor_Numerico'] = pd.to_numeric(df_ext['Valor'], errors='coerce')
                         
-                        # Filtra apenas as SAÍDAS (valores negativos)
                         df_ext_saidas = df_ext[df_ext['Valor_Numerico'] < 0].dropna(subset=['Data_Formatada', 'Valor_Numerico']).copy()
                         df_ext_saidas['Valor_Absoluto'] = df_ext_saidas['Valor_Numerico'].abs() 
 
-                        # Criação das "Chaves Textuais" para o Banco
                         df_ext_saidas['CHAVE_DATA'] = df_ext_saidas['Data_Formatada'].astype(str).str.strip()
                         df_ext_saidas['CHAVE_VALOR'] = df_ext_saidas['Valor_Absoluto'].apply(lambda x: "{:.2f}".format(x))
 
-
-                        # --- 3. PREPARAÇÃO DOS DADOS DO SISTEMA ---
                         df_sistema = carregar_dados()
                         df_sistema = df_sistema[df_sistema['tipo'] == 'Despesa'].copy()
                         df_sistema['valor'] = pd.to_numeric(df_sistema['valor'])
                         
-                        # Criação das "Chaves Textuais" do Sistema
                         df_sistema['CHAVE_DATA'] = pd.to_datetime(df_sistema['data_liquidacao']).dt.date.astype(str).str.strip()
                         df_sistema['CHAVE_VALOR'] = df_sistema['valor'].apply(lambda x: "{:.2f}".format(x))
 
+                        df_conciliados = pd.merge(df_ext_saidas, df_sistema, on=['CHAVE_DATA', 'CHAVE_VALOR'], how='inner')
 
-                        # --- 4. O CRUZAMENTO EXATO (MERGE) ---
-                        df_conciliados = pd.merge(
-                            df_ext_saidas, 
-                            df_sistema, 
-                            on=['CHAVE_DATA', 'CHAVE_VALOR'], 
-                            how='inner'
-                        )
-
-                        # Encontrar os NÃO conciliados do extrato
                         chaves_conciliadas = df_conciliados['CHAVE_DATA'] + df_conciliados['CHAVE_VALOR']
                         df_ext_saidas['CHAVE_UNICA'] = df_ext_saidas['CHAVE_DATA'] + df_ext_saidas['CHAVE_VALOR']
                         df_nao_encontrados = df_ext_saidas[~df_ext_saidas['CHAVE_UNICA'].isin(chaves_conciliadas)]
 
-                        # --- 5. EXIBIÇÃO DOS RESULTADOS ---
                         st.markdown("---")
                         c1, c2 = st.columns(2)
                         c1.metric("✅ Despesas Encontradas (Conciliadas)", len(df_conciliados))
                         c2.metric("⚠️ Despesas NÃO Lançadas no Sistema", len(df_nao_encontrados))
 
-                        tab_pendentes, tab_ok, tab_debug = st.tabs(["🔴 Pendentes de Lançamento", "🟢 Já Conciliados (Lado a Lado)", "🛠️ Diagnóstico de Erro"])
+                        tab_pendentes, tab_ok, tab_debug = st.tabs(["🔴 Pendentes de Lançamento", "🟢 Já Conciliados", "🛠️ Diagnóstico"])
 
                         with tab_pendentes:
                             if not df_nao_encontrados.empty:
-                                st.warning("As seguintes despesas constam no extrato do Sicredi, mas não foram achadas no seu sistema:")
+                                st.warning("As seguintes despesas constam no extrato, mas não foram achadas no seu sistema:")
                                 view_pendentes = df_nao_encontrados[['Data_Formatada', 'Historico', 'Valor_Absoluto']].copy()
                                 view_pendentes.columns = ['Data Extrato', 'Descrição do Banco', 'Valor (R$)']
                                 view_pendentes['Data Extrato'] = pd.to_datetime(view_pendentes['Data Extrato']).dt.strftime('%d/%m/%Y')
@@ -729,45 +796,24 @@ if check_password():
                             else:
                                 st.success("Parabéns! Todas as despesas do extrato estão lançadas no sistema.")
 
-                        # --- VISUALIZAÇÃO LADO A LADO ---
                         with tab_ok:
                             if not df_conciliados.empty:
-                                st.success("Estes lançamentos do extrato encontraram seu par perfeito no sistema:")
-                                
-                                view_ok = df_conciliados[[
-                                    'Data_Formatada', 'Historico', 'Valor_Absoluto', # Banco
-                                    'fornecedor', 'categoria' # Sistema
-                                ]].copy()
-                                
-                                view_ok.columns = [
-                                    '📅 Data', '🏦 Histórico (Banco)', '💵 Valor', 
-                                    '🛒 Fornecedor (Sistema)', '📂 Categoria (Sistema)'
-                                ]
-                                
+                                st.success("Estes lançamentos encontraram seu par perfeito:")
+                                view_ok = df_conciliados[['Data_Formatada', 'Historico', 'Valor_Absoluto', 'fornecedor', 'categoria']].copy()
+                                view_ok.columns = ['📅 Data', '🏦 Histórico', '💵 Valor', '🛒 Fornecedor', '📂 Categoria']
                                 view_ok['📅 Data'] = pd.to_datetime(view_ok['📅 Data']).dt.strftime('%d/%m/%Y')
-
-                                st.dataframe(
-                                    view_ok, 
-                                    use_container_width=True,
-                                    column_config={"💵 Valor": st.column_config.NumberColumn(format="R$ %.2f")},
-                                    hide_index=True
-                                )
+                                st.dataframe(view_ok, use_container_width=True, column_config={"💵 Valor": st.column_config.NumberColumn(format="R$ %.2f")}, hide_index=True)
                             else:
-                                st.error("Nenhum lançamento foi conciliado. Verifique a aba 'Diagnóstico de Erro'.")
+                                st.error("Nenhum lançamento foi conciliado.")
 
-                        # --- 6. FERRAMENTA DE DIAGNÓSTICO ATUALIZADA ---
                         with tab_debug:
-                            st.info("💡 **Sucesso na Leitura!** Agora a tabela do Banco está carregando perfeitamente. Veja abaixo como o sistema as está comparando:")
-                            
                             col_d1, col_d2 = st.columns(2)
                             with col_d1:
-                                st.markdown("##### 🏦 Como o sistema lê o Banco:")
-                                debug_banco = df_ext_saidas[['Data', 'Historico', 'CHAVE_DATA', 'CHAVE_VALOR']].head(5)
-                                st.dataframe(debug_banco, use_container_width=True)
+                                st.markdown("##### 🏦 Lidos do Banco:")
+                                st.dataframe(df_ext_saidas[['Data', 'Historico', 'CHAVE_DATA', 'CHAVE_VALOR']].head(5), use_container_width=True)
                             with col_d2:
-                                st.markdown("##### 🛒 Como o sistema lê o seu Google Sheets:")
-                                debug_sys = df_sistema[['fornecedor', 'categoria', 'CHAVE_DATA', 'CHAVE_VALOR']].head(5)
-                                st.dataframe(debug_sys, use_container_width=True)
+                                st.markdown("##### 🛒 Lidos do Sistema:")
+                                st.dataframe(df_sistema[['fornecedor', 'categoria', 'CHAVE_DATA', 'CHAVE_VALOR']].head(5), use_container_width=True)
 
             except Exception as e:
                 st.error(f"Erro ao processar o arquivo. Detalhe do erro: {e}")
