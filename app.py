@@ -759,11 +759,28 @@ if check_password():
                             if not df_nao_encontrados.empty:
                                 st.warning("Atenção! As seguintes saídas constam no extrato do Banco, mas NÃO foram localizadas no seu Sistema. Preencha os dados abaixo e marque a caixinha para registrá-las.")
                                 
+                                # --- NOVO BLOCO: ADICIONAR FORNECEDOR RÁPIDO NA CONCILIAÇÃO ---
+                                with st.expander("➕ O Fornecedor não está na lista? Cadastre aqui sem sair da tela."):
+                                    c_fn1, c_fn2 = st.columns([3, 1])
+                                    with c_fn1:
+                                        novo_forn_extrato = st.text_input("Digite o nome do novo Fornecedor", key="novo_forn_extrato")
+                                    with c_fn2:
+                                        st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+                                        if st.button("Cadastrar e Atualizar Lista", use_container_width=True):
+                                            if novo_forn_extrato.strip():
+                                                salvar_fornecedor_rapido(novo_forn_extrato)
+                                                st.success(f"Fornecedor '{novo_forn_extrato}' cadastrado com sucesso!")
+                                                time.sleep(1)
+                                                st.cache_data.clear() # Limpa o cache para buscar a lista atualizada
+                                                st.rerun() # Recarrega a tela para a tabela exibir o novo nome
+                                            else:
+                                                st.error("Digite um nome válido.")
+                                # --------------------------------------------------------------
+
                                 mes_atual = MESES_PT[datetime.today().month]
                                 ano_atual = str(datetime.today().year)
                                 lista_anos = gerar_lista_anos()
                                 
-                                # === AQUI CARREGAMOS A LISTA DE FORNECEDORES PARA A TABELA ===
                                 lista_fornecedores_cadastrados = carregar_lista_nomes_fornecedores()
 
                                 df_edit_pendentes = df_nao_encontrados[['Data', 'Historico', 'Valor_Absoluto']].copy()
@@ -772,7 +789,7 @@ if check_password():
                                 df_edit_pendentes.insert(0, "Lançar?", False)
                                 df_edit_pendentes['Mês Comp.'] = mes_atual
                                 df_edit_pendentes['Ano Comp.'] = ano_atual
-                                df_edit_pendentes['Fornecedor'] = None # Começa vazio forçando a seleção
+                                df_edit_pendentes['Fornecedor'] = None 
                                 df_edit_pendentes['Categoria'] = "Outros"
                                 df_edit_pendentes['Observação'] = ""
 
@@ -787,14 +804,11 @@ if check_password():
                                         "Valor (R$)": st.column_config.NumberColumn("Valor (R$)", format="R$ %.2f", disabled=True),
                                         "Mês Comp.": st.column_config.SelectboxColumn("Mês Comp.", options=list(MESES_PT.values()), required=True),
                                         "Ano Comp.": st.column_config.SelectboxColumn("Ano Comp.", options=lista_anos, required=True),
-                                        
-                                        # === AQUI ESTÁ A MUDANÇA PARA A LISTA SUSPENSA ===
                                         "Fornecedor": st.column_config.SelectboxColumn(
                                             "Fornecedor (Selecione)", 
                                             options=lista_fornecedores_cadastrados, 
                                             required=True
                                         ),
-                                        
                                         "Categoria": st.column_config.SelectboxColumn("Classificação", options=CATEGORIAS, required=True),
                                         "Observação": st.column_config.TextColumn("Observação")
                                     }
@@ -810,7 +824,6 @@ if check_password():
                                         erro_encontrado = False
 
                                         for index, row in linhas_marcadas.iterrows():
-                                            # Verifica se o usuário realmente selecionou um fornecedor na lista
                                             if not row['Fornecedor'] or str(row['Fornecedor']).strip() == "":
                                                 st.error(f"⚠️ Selecione um Fornecedor na lista para a despesa de R$ {row['Valor (R$)']:.2f} ({row['Descrição do Banco']})")
                                                 erro_encontrado = True
