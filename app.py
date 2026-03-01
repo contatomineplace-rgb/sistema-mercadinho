@@ -29,10 +29,9 @@ MESES_PT_INV = {v: k for k, v in MESES_PT.items()}
 # --- CONEXÃO COM O GOOGLE SHEETS ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# --- FUNÇÕES DE DADOS COM CACHE ATIVADO (CORREÇÃO DO BUG) ---
+# --- FUNÇÕES DE DADOS COM CACHE ATIVADO ---
 def carregar_dados():
     try:
-        # ttl=600 cria um cache de 10 minutos. Evita que o Google bloqueie o sistema por excesso de requisições.
         df = conn.read(worksheet="lancamentos", ttl=600)
         return df
     except Exception as e:
@@ -41,7 +40,6 @@ def carregar_dados():
 
 def carregar_fornecedores_df():
     try:
-        # ttl=600 para fornecedores também
         df = conn.read(worksheet="fornecedores", ttl=600)
         colunas_necessarias = ['nome', 'cnpj', 'telefone', 'login_app', 'senha_app']
         for col in colunas_necessarias:
@@ -58,7 +56,6 @@ def carregar_lista_nomes_fornecedores():
     df = carregar_fornecedores_df()
     return df['nome'].dropna().unique().tolist()
 
-# Nas funções de escrita (salvar, editar, excluir), o ttl=0 é mantido para garantir precisão antes de gravar.
 def salvar_fornecedor_rapido(novo_nome):
     try:
         df = conn.read(worksheet="fornecedores", ttl=0)
@@ -280,7 +277,7 @@ if check_password():
                     st.session_state["memoria_ano"] = ano_selecionado
                     st.session_state["memoria_data_liq"] = data_liq
                     st.session_state["limpar_despesa_agora"] = True
-                    st.cache_data.clear() # Limpa o cache para carregar os dados novos na próxima tela
+                    st.cache_data.clear()
                     st.rerun()
 
         # === 2. LANÇAMENTO EM LOTE ===
@@ -765,6 +762,9 @@ if check_password():
                                 mes_atual = MESES_PT[datetime.today().month]
                                 ano_atual = str(datetime.today().year)
                                 lista_anos = gerar_lista_anos()
+                                
+                                # === AQUI CARREGAMOS A LISTA DE FORNECEDORES PARA A TABELA ===
+                                lista_fornecedores_cadastrados = carregar_lista_nomes_fornecedores()
 
                                 df_edit_pendentes = df_nao_encontrados[['Data', 'Historico', 'Valor_Absoluto']].copy()
                                 df_edit_pendentes.columns = ['Data Extrato', 'Descrição do Banco', 'Valor (R$)']
@@ -772,7 +772,7 @@ if check_password():
                                 df_edit_pendentes.insert(0, "Lançar?", False)
                                 df_edit_pendentes['Mês Comp.'] = mes_atual
                                 df_edit_pendentes['Ano Comp.'] = ano_atual
-                                df_edit_pendentes['Fornecedor'] = ""
+                                df_edit_pendentes['Fornecedor'] = None # Começa vazio forçando a seleção
                                 df_edit_pendentes['Categoria'] = "Outros"
                                 df_edit_pendentes['Observação'] = ""
 
@@ -787,7 +787,14 @@ if check_password():
                                         "Valor (R$)": st.column_config.NumberColumn("Valor (R$)", format="R$ %.2f", disabled=True),
                                         "Mês Comp.": st.column_config.SelectboxColumn("Mês Comp.", options=list(MESES_PT.values()), required=True),
                                         "Ano Comp.": st.column_config.SelectboxColumn("Ano Comp.", options=lista_anos, required=True),
-                                        "Fornecedor": st.column_config.TextColumn("Fornecedor (Digite)", required=True),
+                                        
+                                        # === AQUI ESTÁ A MUDANÇA PARA A LISTA SUSPENSA ===
+                                        "Fornecedor": st.column_config.SelectboxColumn(
+                                            "Fornecedor (Selecione)", 
+                                            options=lista_fornecedores_cadastrados, 
+                                            required=True
+                                        ),
+                                        
                                         "Categoria": st.column_config.SelectboxColumn("Classificação", options=CATEGORIAS, required=True),
                                         "Observação": st.column_config.TextColumn("Observação")
                                     }
@@ -799,22 +806,17 @@ if check_password():
                                     if linhas_marcadas.empty:
                                         st.warning("Selecione pelo menos uma despesa marcando a caixinha 'Lançar?'.")
                                     else:
-                                        df_forn_atual = carregar_fornecedores_df()
-                                        nomes_forn_existentes = set(df_forn_atual['nome'].str.lower().values)
                                         lista_dados_finais = []
                                         erro_encontrado = False
 
                                         for index, row in linhas_marcadas.iterrows():
+                                            # Verifica se o usuário realmente selecionou um fornecedor na lista
                                             if not row['Fornecedor'] or str(row['Fornecedor']).strip() == "":
-                                                st.error(f"⚠️ Preencha o nome do Fornecedor para a despesa de R$ {row['Valor (R$)']:.2f} ({row['Descrição do Banco']})")
+                                                st.error(f"⚠️ Selecione um Fornecedor na lista para a despesa de R$ {row['Valor (R$)']:.2f} ({row['Descrição do Banco']})")
                                                 erro_encontrado = True
                                                 continue
 
                                             nome_forn = str(row['Fornecedor']).strip()
-                                            if nome_forn.lower() not in nomes_forn_existentes:
-                                                salvar_fornecedor_rapido(nome_forn)
-                                                nomes_forn_existentes.add(nome_forn.lower())
-
                                             mes_num = MESES_PT_INV[row['Mês Comp.']]
                                             comp_fmt = f"{row['Ano Comp.']}-{mes_num:02d}"
 
