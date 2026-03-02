@@ -10,13 +10,14 @@ from streamlit_gsheets import GSheetsConnection
 # --- CONFIGURAÇÕES INICIAIS ---
 st.set_page_config(page_title="Sistema Mercadinho", layout="wide")
 
-# Lista de Categorias
-CATEGORIAS = [
+# Lista Padrão Inicial (Caso a planilha esteja vazia)
+CATEGORIAS_PADRAO = [
     "Mercadoria", "Frete", "Energia", "Comissão", "Manutenção", "Combustível",
     "Salário", "13° Salário", "Férias", "Simples Nacional", "INSS", "FGTS",
     "Internet", "Celular", "Locação", "Tarifa Bancária",
     "Integralização de Capital em Banco", "Cesta de Relacionamento de Banco",
-    "Cartão de Crédito", "Empréstimo", "Consórcio", "Sistemas", "Outros", "Vendas"
+    "Cartão de Crédito", "Empréstimo", "Consórcio", "Sistemas", 
+    "Vale Alimentação", "Mão de obra", "Outros", "Vendas"
 ]
 
 # Dicionário de Meses
@@ -29,16 +30,19 @@ MESES_PT_INV = {v: k for k, v in MESES_PT.items()}
 # --- CONEXÃO COM O GOOGLE SHEETS ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
+# --- FUNÇÕES DE DADOS COM CACHE ATIVADO ---
 def carregar_dados():
     try:
-        df = conn.read(worksheet="lancamentos", ttl=0)
+        df = conn.read(worksheet="lancamentos", ttl=600)
         return df
-    except:
+    except Exception as e:
+        st.error(f"Erro de conexão com o banco de dados (Lançamentos): {e}")
         return pd.DataFrame()
 
+# === FUNÇÕES DE FORNECEDORES ===
 def carregar_fornecedores_df():
     try:
-        df = conn.read(worksheet="fornecedores", ttl=0)
+        df = conn.read(worksheet="fornecedores", ttl=600)
         colunas_necessarias = ['nome', 'cnpj', 'telefone', 'login_app', 'senha_app']
         for col in colunas_necessarias:
             if col not in df.columns:
@@ -46,7 +50,7 @@ def carregar_fornecedores_df():
         df = df.fillna("")
         df = df.astype(str)
         return df
-    except:
+    except Exception as e:
         return pd.DataFrame(columns=['nome', 'cnpj', 'telefone', 'login_app', 'senha_app'])
 
 def carregar_lista_nomes_fornecedores():
@@ -55,22 +59,55 @@ def carregar_lista_nomes_fornecedores():
 
 def salvar_fornecedor_rapido(novo_nome):
     try:
-        df = carregar_fornecedores_df()
-        if novo_nome and novo_nome.strip().lower() not in df['nome'].str.lower().values:
-            novo_registro = pd.DataFrame([{
-                "nome": novo_nome, "cnpj": "", "telefone": "", "login_app": "", "senha_app": ""
-            }])
+        df = conn.read(worksheet="fornecedores", ttl=0)
+        if novo_nome and novo_nome.strip().lower() not in df['nome'].dropna().str.lower().values:
+            novo_registro = pd.DataFrame([{"nome": novo_nome, "cnpj": "", "telefone": "", "login_app": "", "senha_app": ""}])
             df_atualizado = pd.concat([df, novo_registro], ignore_index=True)
             conn.update(worksheet="fornecedores", data=df_atualizado)
     except:
-        novo_registro = pd.DataFrame([{
-            "nome": novo_nome, "cnpj": "", "telefone": "", "login_app": "", "senha_app": ""
-        }])
+        novo_registro = pd.DataFrame([{"nome": novo_nome, "cnpj": "", "telefone": "", "login_app": "", "senha_app": ""}])
         conn.update(worksheet="fornecedores", data=novo_registro)
 
 def salvar_tabela_fornecedores(df_editado):
     conn.update(worksheet="fornecedores", data=df_editado)
 
+# === FUNÇÕES DE CATEGORIAS ===
+def carregar_categorias_df():
+    try:
+        df = conn.read(worksheet="categorias", ttl=600)
+        if 'nome' not in df.columns:
+            df['nome'] = pd.Series(dtype='str')
+        df = df.fillna("")
+        df = df.astype(str)
+        return df
+    except Exception as e:
+        return pd.DataFrame({'nome': CATEGORIAS_PADRAO})
+
+def carregar_lista_categorias():
+    df = carregar_categorias_df()
+    lista = df['nome'].dropna().unique().tolist()
+    if not lista:
+        return CATEGORIAS_PADRAO
+    return lista
+
+def salvar_categoria_rapida(nova_categoria):
+    try:
+        df = conn.read(worksheet="categorias", ttl=0)
+        if 'nome' not in df.columns:
+             df = pd.DataFrame({'nome': CATEGORIAS_PADRAO})
+
+        if nova_categoria and nova_categoria.strip().lower() not in df['nome'].dropna().str.lower().values:
+            novo_registro = pd.DataFrame([{"nome": nova_categoria}])
+            df_atualizado = pd.concat([df, novo_registro], ignore_index=True)
+            conn.update(worksheet="categorias", data=df_atualizado)
+    except Exception as e:
+        novo_registro = pd.DataFrame([{"nome": nova_categoria}])
+        conn.update(worksheet="categorias", data=novo_registro)
+
+def salvar_tabela_categorias(df_editado):
+    conn.update(worksheet="categorias", data=df_editado)
+
+# === FUNÇÕES DE LANÇAMENTOS ===
 def salvar_lancamento(dados):
     try:
         df = conn.read(worksheet="lancamentos", ttl=0)
@@ -106,6 +143,7 @@ def editar_lancamento(indice, novos_dados):
     except Exception as e:
         st.error(f"Erro ao editar: {e}")
 
+# --- FUNÇÕES AUXILIARES ---
 def gerar_lista_anos():
     ano_atual = datetime.now().year
     return [str(ano) for ano in range(2025, ano_atual + 3)]
@@ -234,7 +272,9 @@ if check_password():
                 usar_novo_fornecedor = st.checkbox("Cadastrar Novo Fornecedor?", key="check_novo_forn")
                 if usar_novo_fornecedor: fornecedor = st.text_input("Digite o nome do novo fornecedor", key="txt_novo_forn")
                 else: fornecedor = st.selectbox("Selecione o Fornecedor", [""] + lista_fornecedores, index=None, placeholder="Selecione o Fornecedor", key="sel_forn")
-                categoria = st.selectbox("Classificação", CATEGORIAS, index=None, placeholder="Selecione a Categoria", key="cat_desp")
+                
+                lista_categorias = carregar_lista_categorias()
+                categoria = st.selectbox("Classificação", lista_categorias, index=None, placeholder="Selecione a Categoria", key="cat_desp")
                 obs = st.text_area("Observação", key="obs_desp")
 
             st.markdown("---")
@@ -279,10 +319,48 @@ if check_password():
         # === 2. LANÇAMENTO EM LOTE ===
         with tab_lote:
             st.info("💡 **Dica:** Copie e cole do Excel. O valor será formatado automaticamente na tabela.")
+            
+            # --- CADASTRO RÁPIDO DE FORNECEDOR (LOTE) ---
+            with st.expander("➕ O Fornecedor não está na lista? Cadastre aqui."):
+                c_fn1, c_fn2 = st.columns([3, 1])
+                with c_fn1:
+                    novo_forn_lote = st.text_input("Digite o nome do novo Fornecedor", key="novo_forn_lote")
+                with c_fn2:
+                    st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+                    if st.button("Cadastrar Fornecedor", key="btn_novo_forn_lote", use_container_width=True):
+                        if novo_forn_lote.strip():
+                            salvar_fornecedor_rapido(novo_forn_lote)
+                            st.success(f"Fornecedor '{novo_forn_lote}' cadastrado com sucesso!")
+                            time.sleep(1)
+                            st.cache_data.clear() 
+                            st.rerun() 
+                        else:
+                            st.error("Digite um nome válido.")
+            
+            # --- CADASTRO RÁPIDO DE CLASSIFICAÇÃO (LOTE) ---
+            with st.expander("➕ A Classificação não está na lista? Cadastre aqui."):
+                c_cat1, c_cat2 = st.columns([3, 1])
+                with c_cat1:
+                    nova_cat_lote = st.text_input("Digite o nome da nova Classificação", key="nova_cat_lote")
+                with c_cat2:
+                    st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+                    if st.button("Cadastrar Classificação", key="btn_nova_cat_lote", use_container_width=True):
+                        if nova_cat_lote.strip():
+                            salvar_categoria_rapida(nova_cat_lote)
+                            st.success(f"Classificação '{nova_cat_lote}' cadastrada com sucesso!")
+                            time.sleep(1)
+                            st.cache_data.clear()
+                            st.rerun()
+                        else:
+                            st.error("Digite um nome válido.")
+
             lista_anos = gerar_lista_anos()
+            lista_fornecedores_cadastrados = carregar_lista_nomes_fornecedores()
+            lista_categorias_cadastradas = carregar_lista_categorias()
+            
             linhas_iniciais = [{
                 "valor": None, "data_liquidacao": None, "mes_competencia": None, "ano_competencia": None,
-                "fornecedor": "", "categoria": None, "observacao": "", "status": None
+                "fornecedor": None, "categoria": None, "observacao": "", "status": None
             } for _ in range(10)]
             df_template = pd.DataFrame(linhas_iniciais)
 
@@ -295,8 +373,8 @@ if check_password():
                     "data_liquidacao": st.column_config.DateColumn("Data Pagamento", format="DD/MM/YYYY", required=True),
                     "mes_competencia": st.column_config.SelectboxColumn("Mês Comp.", options=list(MESES_PT.values()), required=True),
                     "ano_competencia": st.column_config.SelectboxColumn("Ano Comp.", options=lista_anos, required=True),
-                    "fornecedor": st.column_config.TextColumn("Fornecedor (Digite)", required=True),
-                    "categoria": st.column_config.SelectboxColumn("Classificação", options=CATEGORIAS, required=True),
+                    "fornecedor": st.column_config.SelectboxColumn("Fornecedor (Selecione)", options=lista_fornecedores_cadastrados, required=True),
+                    "categoria": st.column_config.SelectboxColumn("Classificação (Selecione)", options=lista_categorias_cadastradas, required=True),
                     "observacao": st.column_config.TextColumn("Observação"),
                     "status": st.column_config.SelectboxColumn("Status", options=["Pago", "A Pagar"])
                 },
@@ -307,22 +385,26 @@ if check_password():
                 if lote_editado.empty:
                     st.warning("A tabela está vazia.")
                 else:
-                    df_forn_atual = carregar_fornecedores_df()
-                    nomes_forn_existentes = set(df_forn_atual['nome'].str.lower().values)
                     lista_dados_finais = []
                     erro_encontrado = False
                     for index, row in lote_editado.iterrows():
-                        if not row['fornecedor'] and pd.isna(row['valor']): continue
-                        if not row['fornecedor'] or pd.isna(row['valor']) or pd.isna(row['data_liquidacao']) or not row['mes_competencia'] or not row['ano_competencia']:
+                        if pd.isna(row['fornecedor']) and pd.isna(row['valor']): continue
+                        
+                        if pd.isna(row['fornecedor']) or str(row['fornecedor']).strip() == "" or pd.isna(row['valor']) or pd.isna(row['data_liquidacao']) or not row['mes_competencia'] or not row['ano_competencia']:
                             st.warning(f"Linha {index + 1} incompleta. Verifique Valor, Data, Competência e Fornecedor.")
                             erro_encontrado = True
                             continue
+                            
+                        if pd.isna(row['categoria']) or str(row['categoria']).strip() == "":
+                            st.warning(f"Linha {index + 1} incompleta. Verifique a Classificação.")
+                            erro_encontrado = True
+                            continue
+                            
                         nome_forn = str(row['fornecedor']).strip()
-                        if nome_forn.lower() not in nomes_forn_existentes:
-                            salvar_fornecedor_rapido(nome_forn)
-                            nomes_forn_existentes.add(nome_forn.lower()) 
+                        nome_cat = str(row['categoria']).strip()
                         mes_num = MESES_PT_INV[row['mes_competencia']]
                         comp_fmt = f"{row['ano_competencia']}-{mes_num:02d}"
+                        
                         dados_linha = {
                             "data_registro": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             "tipo": "Despesa",
@@ -331,10 +413,11 @@ if check_password():
                             "data_liquidacao": pd.to_datetime(row['data_liquidacao']).strftime("%Y-%m-%d"),
                             "competencia": comp_fmt,
                             "status": row['status'] if row['status'] else "Pago",
-                            "categoria": row['categoria'] if row['categoria'] else "Outros",
+                            "categoria": nome_cat,
                             "observacao": row['observacao']
                         }
                         lista_dados_finais.append(dados_linha)
+                        
                     if lista_dados_finais and not erro_encontrado:
                         salvar_lote_lancamentos(pd.DataFrame(lista_dados_finais))
                         st.success(f"{len(lista_dados_finais)} despesas salvas com sucesso!")
@@ -357,7 +440,7 @@ if check_password():
             3. **`mes_competencia`**: Nome do mês por extenso (ex: Janeiro).
             4. **`ano_competencia`**: Ano com 4 dígitos (ex: 2026).
             5. **`fornecedor`**: Nome do fornecedor (novos serão cadastrados automaticamente).
-            6. **`categoria`**: Classificação (ex: Mercadoria, Celular, etc).
+            6. **`categoria`**: Classificação (ex: Mercadoria, Celular, etc - novas serão cadastradas automaticamente).
             7. **`status`**: Preencher com 'Pago' ou 'A Pagar'.
             8. **`observacao`**: Opcional.
             """)
@@ -374,10 +457,15 @@ if check_password():
                         if colunas_faltantes:
                             st.error(f"⚠️ Erro: Faltam as seguintes colunas obrigatórias na sua planilha: {', '.join(colunas_faltantes)}")
                         else:
-                            with st.spinner("Processando dados e cadastrando novos fornecedores..."):
+                            with st.spinner("Processando dados e cadastrando novos fornecedores/classificações..."):
                                 df_import.columns = df_import.columns.str.lower()
+                                
                                 df_forn_atual = carregar_fornecedores_df()
                                 nomes_forn_existentes = set(df_forn_atual['nome'].dropna().str.lower().values)
+                                
+                                df_cat_atual = carregar_categorias_df()
+                                nomes_cat_existentes = set(df_cat_atual['nome'].dropna().str.lower().values)
+                                
                                 lista_dados_finais = []
 
                                 for index, row in df_import.iterrows():
@@ -388,6 +476,11 @@ if check_password():
                                     if nome_forn.lower() not in nomes_forn_existentes:
                                         salvar_fornecedor_rapido(nome_forn)
                                         nomes_forn_existentes.add(nome_forn.lower())
+
+                                    cat_str = str(row.get('categoria', 'Outros')).strip()
+                                    if cat_str.lower() not in nomes_cat_existentes:
+                                        salvar_categoria_rapida(cat_str)
+                                        nomes_cat_existentes.add(cat_str.lower())
 
                                     valor_float = converter_moeda_br_para_float(row['valor'])
                                     mes_nome = str(row['mes_competencia']).strip().capitalize()
@@ -407,7 +500,6 @@ if check_password():
                                     status_str = str(row.get('status', 'Pago')).strip()
                                     if status_str.lower() not in ['pago', 'a pagar']: status_str = 'Pago'
 
-                                    cat_str = str(row.get('categoria', 'Outros')).strip()
                                     obs_str = str(row.get('observacao', '')) if pd.notna(row.get('observacao')) else ""
 
                                     dados_linha = {
@@ -539,8 +631,9 @@ if check_password():
                                     idx_forn = lista_forn.index(linha_atual['fornecedor']) if linha_atual['fornecedor'] in lista_forn else 0
                                     novo_fornecedor = st.selectbox("Fornecedor", lista_forn, index=idx_forn)
                                     
-                                    idx_cat = CATEGORIAS.index(linha_atual['categoria']) if linha_atual['categoria'] in CATEGORIAS else 0
-                                    nova_categoria = st.selectbox("Categoria", CATEGORIAS, index=idx_cat)
+                                    lista_cats = carregar_lista_categorias()
+                                    idx_cat = lista_cats.index(linha_atual['categoria']) if linha_atual['categoria'] in lista_cats else 0
+                                    nova_categoria = st.selectbox("Categoria", lista_cats, index=idx_cat)
                                     nova_obs = st.text_area("Observação", value=linha_atual['observacao'])
 
                                 if st.form_submit_button("💾 Salvar Edição", type="primary", use_container_width=True):
@@ -635,10 +728,8 @@ if check_password():
             st.sidebar.markdown("### Filtros do Relatório")
             filtro_tipo = st.sidebar.multiselect("Tipo", options=["Receita", "Despesa"], default=["Receita", "Despesa"])
             
-            # --- NOVO FILTRO DE CATEGORIA ---
             categorias_disp = sorted(df['categoria'].dropna().unique())
             filtro_categoria = st.sidebar.multiselect("Categoria", options=categorias_disp, default=categorias_disp)
-            # --------------------------------
             
             anos_disp = sorted(df['ano_comp'].unique())
             filtro_ano = st.sidebar.multiselect("Ano de Competência", options=anos_disp, default=anos_disp)
@@ -691,7 +782,7 @@ if check_password():
         else:
             st.info("Nenhum dado lançado ainda.")
 
-    # --- ABA: CONCILIAÇÃO BANCÁRIA (LEITOR DE OFX) ---
+    # --- ABA: CONCILIAÇÃO BANCÁRIA ---
     elif menu == "Conciliação Bancária":
         st.header("🏦 Conciliação Bancária Automática (OFX)")
         
@@ -762,9 +853,44 @@ if check_password():
                             if not df_nao_encontrados.empty:
                                 st.warning("Atenção! As seguintes saídas constam no extrato do Banco, mas NÃO foram localizadas no seu Sistema. Preencha os dados abaixo e marque a caixinha para registrá-las.")
                                 
+                                with st.expander("➕ O Fornecedor não está na lista? Cadastre aqui."):
+                                    c_fn1, c_fn2 = st.columns([3, 1])
+                                    with c_fn1:
+                                        novo_forn_extrato = st.text_input("Digite o nome do novo Fornecedor", key="novo_forn_extrato")
+                                    with c_fn2:
+                                        st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+                                        if st.button("Cadastrar Fornecedor", use_container_width=True):
+                                            if novo_forn_extrato.strip():
+                                                salvar_fornecedor_rapido(novo_forn_extrato)
+                                                st.success(f"Fornecedor '{novo_forn_extrato}' cadastrado com sucesso!")
+                                                time.sleep(1)
+                                                st.cache_data.clear() 
+                                                st.rerun() 
+                                            else:
+                                                st.error("Digite um nome válido.")
+                                
+                                with st.expander("➕ A Classificação não está na lista? Cadastre aqui."):
+                                    c_cat1, c_cat2 = st.columns([3, 1])
+                                    with c_cat1:
+                                        nova_cat_extrato = st.text_input("Digite o nome da nova Classificação", key="nova_cat_extrato")
+                                    with c_cat2:
+                                        st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+                                        if st.button("Cadastrar Classificação", key="btn_nova_cat", use_container_width=True):
+                                            if nova_cat_extrato.strip():
+                                                salvar_categoria_rapida(nova_cat_extrato)
+                                                st.success(f"Classificação '{nova_cat_extrato}' cadastrada com sucesso!")
+                                                time.sleep(1)
+                                                st.cache_data.clear()
+                                                st.rerun()
+                                            else:
+                                                st.error("Digite um nome válido.")
+
                                 mes_atual = MESES_PT[datetime.today().month]
                                 ano_atual = str(datetime.today().year)
                                 lista_anos = gerar_lista_anos()
+                                
+                                lista_fornecedores_cadastrados = carregar_lista_nomes_fornecedores()
+                                lista_categorias_cadastradas = carregar_lista_categorias()
 
                                 df_edit_pendentes = df_nao_encontrados[['Data', 'Historico', 'Valor_Absoluto']].copy()
                                 df_edit_pendentes.columns = ['Data Extrato', 'Descrição do Banco', 'Valor (R$)']
@@ -772,8 +898,8 @@ if check_password():
                                 df_edit_pendentes.insert(0, "Lançar?", False)
                                 df_edit_pendentes['Mês Comp.'] = mes_atual
                                 df_edit_pendentes['Ano Comp.'] = ano_atual
-                                df_edit_pendentes['Fornecedor'] = ""
-                                df_edit_pendentes['Categoria'] = "Outros"
+                                df_edit_pendentes['Fornecedor'] = None 
+                                df_edit_pendentes['Categoria'] = None 
                                 df_edit_pendentes['Observação'] = ""
 
                                 edited_pendentes = st.data_editor(
@@ -787,8 +913,16 @@ if check_password():
                                         "Valor (R$)": st.column_config.NumberColumn("Valor (R$)", format="R$ %.2f", disabled=True),
                                         "Mês Comp.": st.column_config.SelectboxColumn("Mês Comp.", options=list(MESES_PT.values()), required=True),
                                         "Ano Comp.": st.column_config.SelectboxColumn("Ano Comp.", options=lista_anos, required=True),
-                                        "Fornecedor": st.column_config.TextColumn("Fornecedor (Digite)", required=True),
-                                        "Categoria": st.column_config.SelectboxColumn("Classificação", options=CATEGORIAS, required=True),
+                                        "Fornecedor": st.column_config.SelectboxColumn(
+                                            "Fornecedor (Selecione)", 
+                                            options=lista_fornecedores_cadastrados, 
+                                            required=True
+                                        ),
+                                        "Categoria": st.column_config.SelectboxColumn(
+                                            "Classificação (Selecione)", 
+                                            options=lista_categorias_cadastradas, 
+                                            required=True
+                                        ),
                                         "Observação": st.column_config.TextColumn("Observação")
                                     }
                                 )
@@ -799,22 +933,22 @@ if check_password():
                                     if linhas_marcadas.empty:
                                         st.warning("Selecione pelo menos uma despesa marcando a caixinha 'Lançar?'.")
                                     else:
-                                        df_forn_atual = carregar_fornecedores_df()
-                                        nomes_forn_existentes = set(df_forn_atual['nome'].str.lower().values)
                                         lista_dados_finais = []
                                         erro_encontrado = False
 
                                         for index, row in linhas_marcadas.iterrows():
                                             if not row['Fornecedor'] or str(row['Fornecedor']).strip() == "":
-                                                st.error(f"⚠️ Preencha o nome do Fornecedor para a despesa de R$ {row['Valor (R$)']:.2f} ({row['Descrição do Banco']})")
+                                                st.error(f"⚠️ Selecione um Fornecedor na lista para a despesa de R$ {row['Valor (R$)']:.2f}")
+                                                erro_encontrado = True
+                                                continue
+                                            
+                                            if not row['Categoria'] or str(row['Categoria']).strip() == "":
+                                                st.error(f"⚠️ Selecione uma Classificação na lista para a despesa de R$ {row['Valor (R$)']:.2f}")
                                                 erro_encontrado = True
                                                 continue
 
                                             nome_forn = str(row['Fornecedor']).strip()
-                                            if nome_forn.lower() not in nomes_forn_existentes:
-                                                salvar_fornecedor_rapido(nome_forn)
-                                                nomes_forn_existentes.add(nome_forn.lower())
-
+                                            nome_cat = str(row['Categoria']).strip()
                                             mes_num = MESES_PT_INV[row['Mês Comp.']]
                                             comp_fmt = f"{row['Ano Comp.']}-{mes_num:02d}"
 
@@ -826,7 +960,7 @@ if check_password():
                                                 "data_liquidacao": pd.to_datetime(row['Data Extrato']).strftime("%Y-%m-%d"),
                                                 "competencia": comp_fmt,
                                                 "status": "Pago", 
-                                                "categoria": row['Categoria'],
+                                                "categoria": nome_cat,
                                                 "observacao": str(row['Observação']) if pd.notna(row['Observação']) else ""
                                             }
                                             lista_dados_finais.append(dados_linha)
@@ -860,7 +994,8 @@ if check_password():
     # --- ABA: CONFIGURAÇÕES ---
     elif menu == "Configurações":
         st.header("⚙️ Configurações")
-        tab_fornecedores, tab_outros = st.tabs(["🏭 Fornecedores", "Outros"])
+        tab_fornecedores, tab_categorias, tab_outros = st.tabs(["🏭 Fornecedores", "📂 Classificações", "Outros"])
+        
         with tab_fornecedores:
             st.subheader("Gerenciar Fornecedores")
             st.info("Edite os nomes e dados de acesso. Clique em 'Salvar Alterações' para confirmar.")
@@ -881,5 +1016,24 @@ if check_password():
             if st.button("💾 Salvar Alterações nos Fornecedores"):
                 salvar_tabela_fornecedores(df_editado)
                 st.success("Lista de fornecedores atualizada com sucesso!")
+                st.cache_data.clear()
+                st.rerun()
+                
+        with tab_categorias:
+            st.subheader("Gerenciar Classificações (Categorias)")
+            st.info("Edite ou adicione novos nomes de classificação. Clique em 'Salvar Alterações' para confirmar.")
+            df_categorias = carregar_categorias_df()
+            df_cat_editado = st.data_editor(
+                df_categorias,
+                num_rows="dynamic", 
+                column_config={
+                    "nome": st.column_config.TextColumn("Nome da Classificação", required=True)
+                },
+                use_container_width=True,
+                hide_index=True
+            )
+            if st.button("💾 Salvar Alterações nas Classificações"):
+                salvar_tabela_categorias(df_cat_editado)
+                st.success("Lista de classificações atualizada com sucesso!")
                 st.cache_data.clear()
                 st.rerun()
