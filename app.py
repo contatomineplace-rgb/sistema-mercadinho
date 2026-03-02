@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import time
 import hashlib
+import calendar
 from datetime import datetime, date
 import re
 from streamlit_gsheets import GSheetsConnection
@@ -319,7 +320,6 @@ if check_password():
         with tab_lote:
             st.info("💡 **Dica:** Copie e cole do Excel. O valor será formatado automaticamente na tabela.")
             
-            # --- CADASTRO RÁPIDO DE FORNECEDOR (LOTE) ---
             with st.expander("➕ O Fornecedor não está na lista? Cadastre aqui."):
                 c_fn1, c_fn2 = st.columns([3, 1])
                 with c_fn1:
@@ -336,7 +336,6 @@ if check_password():
                         else:
                             st.error("Digite um nome válido.")
             
-            # --- CADASTRO RÁPIDO DE CLASSIFICAÇÃO (LOTE) ---
             with st.expander("➕ A Classificação não está na lista? Cadastre aqui."):
                 c_cat1, c_cat2 = st.columns([3, 1])
                 with c_cat1:
@@ -624,7 +623,6 @@ if check_password():
                                     novo_mes = st.selectbox("Mês de Competência", list(MESES_PT.values()), index=list(MESES_PT.values()).index(mes_atual_nome))
                                     novo_ano = st.selectbox("Ano de Competência", gerar_lista_anos(), index=gerar_lista_anos().index(ano_atual))
                                     
-                                    # Corrige possivel problema de status vazio
                                     status_atual = linha_atual.get('status', 'Pago')
                                     if pd.isna(status_atual): status_atual = 'Pago'
                                     novo_status = st.selectbox("Status", ["Pago", "A Pagar"], index=["Pago", "A Pagar"].index(status_atual))
@@ -728,69 +726,160 @@ if check_password():
             df['mes_comp_num'] = df['competencia'].str[5:].astype(int)
             df['mes_comp_nome'] = df['mes_comp_num'].map(MESES_PT)
 
-            st.sidebar.markdown("### Filtros do Relatório")
-            filtro_tipo = st.sidebar.multiselect("Tipo", options=["Receita", "Despesa"], default=["Receita", "Despesa"])
-            
-            categorias_disp = sorted(df['categoria'].dropna().unique())
-            filtro_categoria = st.sidebar.multiselect("Categoria", options=categorias_disp, default=categorias_disp)
-            
-            # --- NOVO FILTRO DE STATUS ---
-            if 'status' in df.columns:
-                status_disp = sorted(df['status'].dropna().unique())
-            else:
-                status_disp = []
-            filtro_status = st.sidebar.multiselect("Status", options=status_disp, default=status_disp)
-            # -----------------------------
-            
-            anos_disp = sorted(df['ano_comp'].unique())
-            filtro_ano = st.sidebar.multiselect("Ano de Competência", options=anos_disp, default=anos_disp)
-            meses_disp_nome = [MESES_PT[m] for m in sorted(df['mes_comp_num'].unique())]
-            filtro_mes = st.sidebar.multiselect("Mês de Competência", options=meses_disp_nome, default=meses_disp_nome)
-            min_date = df['data_liquidacao'].min().date()
-            max_date = df['data_liquidacao'].max().date()
-            periodo = st.sidebar.date_input("Período (Data Liquidação)", value=(min_date, max_date), min_value=min_date, max_value=max_date)
+            # Abas para separar o Dashboard do Calendário
+            tab_dash, tab_calendario = st.tabs(["📊 Dashboard e Extrato", "📅 Calendário de Vencimentos (A Pagar)"])
 
-            df_filtered = df.copy()
-            if filtro_tipo: df_filtered = df_filtered[df_filtered['tipo'].isin(filtro_tipo)]
-            if filtro_categoria: df_filtered = df_filtered[df_filtered['categoria'].isin(filtro_categoria)]
-            if filtro_status: df_filtered = df_filtered[df_filtered['status'].isin(filtro_status)]
-            if filtro_ano: df_filtered = df_filtered[df_filtered['ano_comp'].isin(filtro_ano)]
-            if filtro_mes: df_filtered = df_filtered[df_filtered['mes_comp_nome'].isin(filtro_mes)]
-            if isinstance(periodo, tuple) and len(periodo) == 2:
-                df_filtered = df_filtered[(df_filtered['data_liquidacao'].dt.date >= periodo[0]) & (df_filtered['data_liquidacao'].dt.date <= periodo[1])]
+            with tab_dash:
+                st.sidebar.markdown("### Filtros do Relatório")
+                filtro_tipo = st.sidebar.multiselect("Tipo", options=["Receita", "Despesa"], default=["Receita", "Despesa"])
+                
+                categorias_disp = sorted(df['categoria'].dropna().unique())
+                filtro_categoria = st.sidebar.multiselect("Categoria", options=categorias_disp, default=categorias_disp)
+                
+                if 'status' in df.columns:
+                    status_disp = sorted(df['status'].dropna().unique())
+                else:
+                    status_disp = []
+                filtro_status = st.sidebar.multiselect("Status", options=status_disp, default=status_disp)
+                
+                anos_disp = sorted(df['ano_comp'].unique())
+                filtro_ano = st.sidebar.multiselect("Ano de Competência", options=anos_disp, default=anos_disp)
+                meses_disp_nome = [MESES_PT[m] for m in sorted(df['mes_comp_num'].unique())]
+                filtro_mes = st.sidebar.multiselect("Mês de Competência", options=meses_disp_nome, default=meses_disp_nome)
+                min_date = df['data_liquidacao'].min().date()
+                max_date = df['data_liquidacao'].max().date()
+                periodo = st.sidebar.date_input("Período (Data Liquidação)", value=(min_date, max_date), min_value=min_date, max_value=max_date)
 
-            total_rec = df_filtered[df_filtered['tipo'] == 'Receita']['valor'].sum()
-            total_desp = df_filtered[df_filtered['tipo'] == 'Despesa']['valor'].sum()
-            saldo = total_rec - total_desp
-            
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Receitas", f"R$ {total_rec:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-            c2.metric("Despesas", f"R$ {total_desp:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), delta_color="inverse")
-            c3.metric("Resultado", f"R$ {saldo:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+                df_filtered = df.copy()
+                if filtro_tipo: df_filtered = df_filtered[df_filtered['tipo'].isin(filtro_tipo)]
+                if filtro_categoria: df_filtered = df_filtered[df_filtered['categoria'].isin(filtro_categoria)]
+                if filtro_status: df_filtered = df_filtered[df_filtered['status'].isin(filtro_status)]
+                if filtro_ano: df_filtered = df_filtered[df_filtered['ano_comp'].isin(filtro_ano)]
+                if filtro_mes: df_filtered = df_filtered[df_filtered['mes_comp_nome'].isin(filtro_mes)]
+                if isinstance(periodo, tuple) and len(periodo) == 2:
+                    df_filtered = df_filtered[(df_filtered['data_liquidacao'].dt.date >= periodo[0]) & (df_filtered['data_liquidacao'].dt.date <= periodo[1])]
 
-            st.markdown("---")
-            if not df_filtered.empty:
-                col_g1, col_g2 = st.columns(2)
-                with col_g1:
-                    st.subheader("Evolução Mensal (Receita x Despesa)")
-                    df_chart1 = df_filtered.groupby(['competencia', 'tipo'])['valor'].sum().unstack().fillna(0)
-                    st.bar_chart(df_chart1, use_container_width=True)
-                with col_g2:
-                    st.subheader("Distribuição por Categoria")
-                    df_cat = df_filtered.groupby("categoria")["valor"].sum().sort_values(ascending=False)
-                    st.bar_chart(df_cat, use_container_width=True)
-            else:
-                st.info("Sem dados para exibir nos gráficos com os filtros atuais.")
+                total_rec = df_filtered[df_filtered['tipo'] == 'Receita']['valor'].sum()
+                total_desp = df_filtered[df_filtered['tipo'] == 'Despesa']['valor'].sum()
+                saldo = total_rec - total_desp
+                
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Receitas", f"R$ {total_rec:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+                c2.metric("Despesas", f"R$ {total_desp:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), delta_color="inverse")
+                c3.metric("Resultado", f"R$ {saldo:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
 
-            st.subheader("Extrato Detalhado")
-            st.dataframe(
-                df_filtered.sort_values("data_liquidacao", ascending=False), 
-                use_container_width=True,
-                column_config={
-                    "data_liquidacao": st.column_config.DateColumn("Data Liq.", format="DD/MM/YYYY"),
-                    "valor": st.column_config.NumberColumn("Valor", format="R$ %.2f")
-                }
-            )
+                st.markdown("---")
+                if not df_filtered.empty:
+                    col_g1, col_g2 = st.columns(2)
+                    with col_g1:
+                        st.subheader("Evolução Mensal (Receita x Despesa)")
+                        df_chart1 = df_filtered.groupby(['competencia', 'tipo'])['valor'].sum().unstack().fillna(0)
+                        st.bar_chart(df_chart1, use_container_width=True)
+                    with col_g2:
+                        st.subheader("Distribuição por Categoria")
+                        df_cat = df_filtered.groupby("categoria")["valor"].sum().sort_values(ascending=False)
+                        st.bar_chart(df_cat, use_container_width=True)
+                else:
+                    st.info("Sem dados para exibir nos gráficos com os filtros atuais.")
+
+                st.subheader("Extrato Detalhado")
+                st.dataframe(
+                    df_filtered.sort_values("data_liquidacao", ascending=False), 
+                    use_container_width=True,
+                    column_config={
+                        "data_liquidacao": st.column_config.DateColumn("Data Liq.", format="DD/MM/YYYY"),
+                        "valor": st.column_config.NumberColumn("Valor", format="R$ %.2f")
+                    }
+                )
+
+            with tab_calendario:
+                st.subheader("🗓️ Calendário de Vencimentos")
+                st.markdown("Os dias marcados em destaque (**🚨**) possuem despesas com o status **A Pagar**. Clique num dia para ver os detalhes.")
+                
+                if 'status' not in df.columns:
+                    st.warning("O seu banco de dados ainda não tem a coluna de Status configurada corretamente.")
+                else:
+                    df_a_pagar = df[(df['tipo'] == 'Despesa') & (df['status'] == 'A Pagar')].copy()
+                    
+                    col_c1, col_c2 = st.columns(2)
+                    with col_c1:
+                        cal_mes = st.selectbox("Mês do Calendário", list(MESES_PT.values()), index=datetime.today().month - 1, key="cal_mes")
+                    with col_c2:
+                        cal_ano = st.selectbox("Ano do Calendário", gerar_lista_anos(), index=gerar_lista_anos().index(str(datetime.today().year)), key="cal_ano")
+
+                    mes_num = MESES_PT_INV[cal_mes]
+                    ano_num = int(cal_ano)
+
+                    df_a_pagar_mes = df_a_pagar[
+                        (df_a_pagar['data_liquidacao'].dt.month == mes_num) & 
+                        (df_a_pagar['data_liquidacao'].dt.year == ano_num)
+                    ]
+                    
+                    datas_com_pendencia = df_a_pagar_mes['data_liquidacao'].dt.date.unique()
+
+                    # Estilização para o calendário ocupar 100% da largura da coluna
+                    st.markdown('''
+                        <style>
+                        div[data-testid="column"] button {
+                            width: 100%;
+                            height: 60px;
+                            font-size: 18px;
+                        }
+                        </style>
+                    ''', unsafe_allow_html=True)
+
+                    dias_semana = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
+                    cols_header = st.columns(7)
+                    for i, dia in enumerate(dias_semana):
+                        cols_header[i].markdown(f"<div style='text-align: center; font-weight: bold;'>{dia}</div>", unsafe_allow_html=True)
+
+                    cal = calendar.monthcalendar(ano_num, mes_num)
+                    
+                    for semana in cal:
+                        cols = st.columns(7)
+                        for i, dia in enumerate(semana):
+                            if dia == 0:
+                                cols[i].write("") 
+                            else:
+                                data_atual = date(ano_num, mes_num, dia)
+                                tem_pendencia = data_atual in datas_com_pendencia
+                                
+                                if tem_pendencia:
+                                    if cols[i].button(f"🚨 {dia}", key=f"btn_cal_{data_atual}", type="primary", help="Há despesas a pagar neste dia!"):
+                                        st.session_state['cal_data_selecionada'] = data_atual
+                                else:
+                                    if cols[i].button(f"{dia}", key=f"btn_cal_{data_atual}", help="Sem pendências para este dia."):
+                                        st.session_state['cal_data_selecionada'] = data_atual
+
+                    st.markdown("---")
+                    
+                    if 'cal_data_selecionada' in st.session_state:
+                        data_sel = st.session_state['cal_data_selecionada']
+                        
+                        if data_sel.month == mes_num and data_sel.year == ano_num:
+                            st.markdown(f"#### 🔎 Despesas para o dia {data_sel.strftime('%d/%m/%Y')}")
+                            df_dia = df[(df['tipo'] == 'Despesa') & (df['data_liquidacao'].dt.date == data_sel)]
+                            
+                            if not df_dia.empty:
+                                df_dia_view = df_dia[['fornecedor', 'categoria', 'status', 'valor', 'observacao']].copy()
+                                st.dataframe(
+                                    df_dia_view,
+                                    use_container_width=True,
+                                    column_config={
+                                        "valor": st.column_config.NumberColumn("Valor (R$)", format="R$ %.2f")
+                                    },
+                                    hide_index=True
+                                )
+                                
+                                total_dia = df_dia['valor'].sum()
+                                total_pendente = df_dia[df_dia['status'] == 'A Pagar']['valor'].sum()
+                                
+                                c1, c2 = st.columns(2)
+                                c1.metric("Total Agendado no Dia", f"R$ {total_dia:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+                                c2.metric("Total A Pagar (Pendente)", f"R$ {total_pendente:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), delta_color="inverse")
+                            else:
+                                st.success("Nenhuma despesa lançada para este dia! 🎉")
+
         else:
             st.info("Nenhum dado lançado ainda.")
 
