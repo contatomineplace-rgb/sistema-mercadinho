@@ -3,8 +3,7 @@ import pandas as pd
 import time
 import hashlib
 from datetime import datetime, date
-import io
-import csv
+import re
 from streamlit_gsheets import GSheetsConnection
 
 # --- CONFIGURAÇÕES INICIAIS ---
@@ -624,7 +623,11 @@ if check_password():
                                     
                                     novo_mes = st.selectbox("Mês de Competência", list(MESES_PT.values()), index=list(MESES_PT.values()).index(mes_atual_nome))
                                     novo_ano = st.selectbox("Ano de Competência", gerar_lista_anos(), index=gerar_lista_anos().index(ano_atual))
-                                    novo_status = st.selectbox("Status", ["Pago", "A Pagar"], index=["Pago", "A Pagar"].index(linha_atual['status']))
+                                    
+                                    # Corrige possivel problema de status vazio
+                                    status_atual = linha_atual.get('status', 'Pago')
+                                    if pd.isna(status_atual): status_atual = 'Pago'
+                                    novo_status = st.selectbox("Status", ["Pago", "A Pagar"], index=["Pago", "A Pagar"].index(status_atual))
 
                                 with c2:
                                     lista_forn = carregar_lista_nomes_fornecedores()
@@ -731,6 +734,14 @@ if check_password():
             categorias_disp = sorted(df['categoria'].dropna().unique())
             filtro_categoria = st.sidebar.multiselect("Categoria", options=categorias_disp, default=categorias_disp)
             
+            # --- NOVO FILTRO DE STATUS ---
+            if 'status' in df.columns:
+                status_disp = sorted(df['status'].dropna().unique())
+            else:
+                status_disp = []
+            filtro_status = st.sidebar.multiselect("Status", options=status_disp, default=status_disp)
+            # -----------------------------
+            
             anos_disp = sorted(df['ano_comp'].unique())
             filtro_ano = st.sidebar.multiselect("Ano de Competência", options=anos_disp, default=anos_disp)
             meses_disp_nome = [MESES_PT[m] for m in sorted(df['mes_comp_num'].unique())]
@@ -742,6 +753,7 @@ if check_password():
             df_filtered = df.copy()
             if filtro_tipo: df_filtered = df_filtered[df_filtered['tipo'].isin(filtro_tipo)]
             if filtro_categoria: df_filtered = df_filtered[df_filtered['categoria'].isin(filtro_categoria)]
+            if filtro_status: df_filtered = df_filtered[df_filtered['status'].isin(filtro_status)]
             if filtro_ano: df_filtered = df_filtered[df_filtered['ano_comp'].isin(filtro_ano)]
             if filtro_mes: df_filtered = df_filtered[df_filtered['mes_comp_nome'].isin(filtro_mes)]
             if isinstance(periodo, tuple) and len(periodo) == 2:
