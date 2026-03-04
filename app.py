@@ -742,6 +742,14 @@ if check_password():
                     status_disp = []
                 filtro_status = st.sidebar.multiselect("Status", options=status_disp, default=status_disp)
                 
+                # --- NOVO FILTRO DE FORNECEDOR ---
+                if 'fornecedor' in df.columns:
+                    fornecedores_disp = sorted(df['fornecedor'].dropna().astype(str).unique())
+                else:
+                    fornecedores_disp = []
+                filtro_fornecedor = st.sidebar.multiselect("Fornecedor", options=fornecedores_disp, default=fornecedores_disp)
+                # ---------------------------------
+                
                 anos_disp = sorted(df['ano_comp'].unique())
                 filtro_ano = st.sidebar.multiselect("Ano de Competência", options=anos_disp, default=anos_disp)
                 meses_disp_nome = [MESES_PT[m] for m in sorted(df['mes_comp_num'].unique())]
@@ -754,6 +762,7 @@ if check_password():
                 if filtro_tipo: df_filtered = df_filtered[df_filtered['tipo'].isin(filtro_tipo)]
                 if filtro_categoria: df_filtered = df_filtered[df_filtered['categoria'].isin(filtro_categoria)]
                 if filtro_status: df_filtered = df_filtered[df_filtered['status'].isin(filtro_status)]
+                if filtro_fornecedor: df_filtered = df_filtered[df_filtered['fornecedor'].isin(filtro_fornecedor)]
                 if filtro_ano: df_filtered = df_filtered[df_filtered['ano_comp'].isin(filtro_ano)]
                 if filtro_mes: df_filtered = df_filtered[df_filtered['mes_comp_nome'].isin(filtro_mes)]
                 if isinstance(periodo, tuple) and len(periodo) == 2:
