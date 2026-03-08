@@ -616,8 +616,8 @@ if check_password():
                                     novo_valor = st.number_input("Valor (R$)", value=float(linha_atual['valor']), min_value=0.0)
                                     nova_data = st.date_input("Data de Liquidação", value=pd.to_datetime(linha_atual['data_liquidacao']).date(), format="DD/MM/YYYY")
                                     
-                                    ano_atual = linha_atual['competencia'][:4]
-                                    mes_atual_num = int(linha_atual['competencia'][5:])
+                                    ano_atual = str(linha_atual['competencia'])[:4]
+                                    mes_atual_num = int(str(linha_atual['competencia'])[5:])
                                     mes_atual_nome = MESES_PT[mes_atual_num]
                                     
                                     novo_mes = st.selectbox("Mês de Competência", list(MESES_PT.values()), index=list(MESES_PT.values()).index(mes_atual_nome))
@@ -635,7 +635,7 @@ if check_password():
                                     lista_cats = carregar_lista_categorias()
                                     idx_cat = lista_cats.index(linha_atual['categoria']) if linha_atual['categoria'] in lista_cats else 0
                                     nova_categoria = st.selectbox("Categoria", lista_cats, index=idx_cat)
-                                    nova_obs = st.text_area("Observação", value=linha_atual['observacao'])
+                                    nova_obs = st.text_area("Observação", value=str(linha_atual.get('observacao', '')))
 
                                 if st.form_submit_button("💾 Salvar Edição", type="primary", use_container_width=True):
                                     mes_num = MESES_PT_INV[novo_mes]
@@ -742,13 +742,11 @@ if check_password():
                     status_disp = []
                 filtro_status = st.sidebar.multiselect("Status", options=status_disp, default=status_disp)
                 
-                # --- NOVO FILTRO DE FORNECEDOR ---
                 if 'fornecedor' in df.columns:
                     fornecedores_disp = sorted(df['fornecedor'].dropna().astype(str).unique())
                 else:
                     fornecedores_disp = []
                 filtro_fornecedor = st.sidebar.multiselect("Fornecedor", options=fornecedores_disp, default=fornecedores_disp)
-                # ---------------------------------
                 
                 anos_disp = sorted(df['ano_comp'].unique())
                 filtro_ano = st.sidebar.multiselect("Ano de Competência", options=anos_disp, default=anos_disp)
@@ -791,15 +789,111 @@ if check_password():
                 else:
                     st.info("Sem dados para exibir nos gráficos com os filtros atuais.")
 
-                st.subheader("Extrato Detalhado")
-                st.dataframe(
-                    df_filtered.sort_values("data_liquidacao", ascending=False), 
+                # --- NOVO BLOCO: EXTRATO EDITÁVEL ---
+                st.subheader("Extrato Detalhado Interativo")
+                st.markdown("Marque a caixa **'Editar?'** ao lado de qualquer lançamento para alterar os seus dados ou excluí-lo.")
+                
+                df_extrato_view = df_filtered.copy()
+                df_extrato_view.insert(0, "✏️ Editar", False)
+                df_sorted = df_extrato_view.sort_values("data_liquidacao", ascending=False)
+                
+                colunas_desabilitadas = df_sorted.columns.tolist()
+                colunas_desabilitadas.remove("✏️ Editar")
+                
+                editor_extrato = st.data_editor(
+                    df_sorted, 
                     use_container_width=True,
+                    hide_index=True,
+                    disabled=colunas_desabilitadas,
                     column_config={
+                        "✏️ Editar": st.column_config.CheckboxColumn("Editar?", required=True),
                         "data_liquidacao": st.column_config.DateColumn("Data Liq.", format="DD/MM/YYYY"),
-                        "valor": st.column_config.NumberColumn("Valor", format="R$ %.2f")
+                        "valor": st.column_config.NumberColumn("Valor", format="R$ %.2f"),
+                        "ano_comp": None, 
+                        "mes_comp_num": None, 
+                        "mes_comp_nome": None 
                     }
                 )
+
+                linhas_editar = editor_extrato[editor_extrato["✏️ Editar"] == True]
+
+                if not linhas_editar.empty:
+                    st.markdown("---")
+                    if len(linhas_editar) > 1:
+                        st.warning("⚠️ Selecione apenas UM lançamento para editar por vez.")
+                    else:
+                        idx = linhas_editar.index[0]
+                        linha_atual = df_filtered.loc[idx]
+                        tipo_lanc = linha_atual['tipo']
+                        
+                        st.markdown(f"### 📝 Editar Lançamento ({tipo_lanc})")
+                        with st.form(key=f"form_edit_relatorio_{idx}"):
+                            c_ed1, c_ed2 = st.columns(2)
+                            with c_ed1:
+                                novo_valor = st.number_input("Valor (R$)", value=float(linha_atual['valor']), min_value=0.0)
+                                nova_data = st.date_input("Data", value=pd.to_datetime(linha_atual['data_liquidacao']).date(), format="DD/MM/YYYY")
+                                
+                                ano_atual = str(linha_atual['competencia'])[:4]
+                                mes_atual_num = int(str(linha_atual['competencia'])[5:7])
+                                mes_atual_nome = MESES_PT[mes_atual_num]
+                                
+                                novo_mes = st.selectbox("Mês Comp.", list(MESES_PT.values()), index=list(MESES_PT.values()).index(mes_atual_nome))
+                                novo_ano = st.selectbox("Ano Comp.", gerar_lista_anos(), index=gerar_lista_anos().index(ano_atual))
+                                
+                                status_atual = str(linha_atual.get('status', 'Pago' if tipo_lanc == 'Despesa' else 'Recebido'))
+                                opcoes_status = ["Pago", "A Pagar"] if tipo_lanc == 'Despesa' else ["Recebido", "A Receber"]
+                                if status_atual not in opcoes_status:
+                                    opcoes_status.append(status_atual)
+                                novo_status = st.selectbox("Status", opcoes_status, index=opcoes_status.index(status_atual))
+
+                            with c_ed2:
+                                lista_forn = carregar_lista_nomes_fornecedores()
+                                forn_atual = str(linha_atual.get('fornecedor', ''))
+                                if forn_atual and forn_atual not in lista_forn:
+                                    lista_forn = [forn_atual] + lista_forn
+                                novo_fornecedor = st.selectbox("Fornecedor/Cliente", lista_forn, index=lista_forn.index(forn_atual) if forn_atual in lista_forn else 0)
+                                
+                                lista_cats = carregar_lista_categorias()
+                                cat_atual = str(linha_atual.get('categoria', ''))
+                                if cat_atual and cat_atual not in lista_cats:
+                                    lista_cats = [cat_atual] + lista_cats
+                                nova_categoria = st.selectbox("Categoria", lista_cats, index=lista_cats.index(cat_atual) if cat_atual in lista_cats else 0)
+                                
+                                nova_obs = st.text_area("Observação", value=str(linha_atual.get('observacao', '')))
+
+                            col_btn1, col_btn2 = st.columns([1, 1])
+                            with col_btn1:
+                                submit_edit = st.form_submit_button("💾 Salvar Alterações", type="primary", use_container_width=True)
+                            with col_btn2:
+                                submit_del = st.form_submit_button("🗑️ Excluir Lançamento", type="secondary", use_container_width=True)
+                                
+                            if submit_edit:
+                                mes_num = MESES_PT_INV[novo_mes]
+                                nova_comp = f"{novo_ano}-{mes_num:02d}"
+                                
+                                dados_atualizados = {
+                                    "valor": novo_valor,
+                                    "fornecedor": novo_fornecedor,
+                                    "data_liquidacao": nova_data.strftime("%Y-%m-%d"),
+                                    "competencia": nova_comp,
+                                    "status": novo_status,
+                                    "categoria": nova_categoria,
+                                    "observacao": nova_obs
+                                }
+                                
+                                editar_lancamento(idx, dados_atualizados)
+                                st.success("Lançamento atualizado com sucesso!")
+                                time.sleep(2)
+                                st.cache_data.clear()
+                                st.rerun()
+                                
+                            if submit_del:
+                                excluir_lancamentos([idx])
+                                st.success("Lançamento excluído com sucesso!")
+                                time.sleep(2)
+                                st.cache_data.clear()
+                                st.rerun()
+                # -----------------------------------------------
 
             with tab_calendario:
                 st.subheader("🗓️ Calendário de Vencimentos")
@@ -826,7 +920,6 @@ if check_password():
                     
                     datas_com_pendencia = df_a_pagar_mes['data_liquidacao'].dt.date.unique()
 
-                    # Estilização para o calendário ocupar 100% da largura da coluna
                     st.markdown('''
                         <style>
                         div[data-testid="column"] button {
