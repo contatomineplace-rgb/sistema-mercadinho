@@ -143,6 +143,17 @@ def editar_lancamento(indice, novos_dados):
     except Exception as e:
         st.error(f"Erro ao editar: {e}")
 
+def editar_multiplos_lancamentos(atualizacoes_dict):
+    """Função otimizada para salvar múltiplas edições no Google Sheets de uma só vez"""
+    try:
+        df = conn.read(worksheet="lancamentos", ttl=0)
+        for indice, novos_dados in atualizacoes_dict.items():
+            for chave, valor in novos_dados.items():
+                df.at[indice, chave] = valor
+        conn.update(worksheet="lancamentos", data=df)
+    except Exception as e:
+        st.error(f"Erro ao salvar as edições: {e}")
+
 # --- FUNÇÕES AUXILIARES ---
 def gerar_lista_anos():
     ano_atual = datetime.now().year
@@ -789,7 +800,6 @@ if check_password():
                 else:
                     st.info("Sem dados para exibir nos gráficos com os filtros atuais.")
 
-                # --- NOVO BLOCO: EXTRATO EDITÁVEL ---
                 st.subheader("Extrato Detalhado Interativo")
                 st.markdown("Marque a caixa **'Editar?'** ao lado de qualquer lançamento para alterar os seus dados ou excluí-lo.")
                 
@@ -893,7 +903,6 @@ if check_password():
                                 time.sleep(2)
                                 st.cache_data.clear()
                                 st.rerun()
-                # -----------------------------------------------
 
             with tab_calendario:
                 st.subheader("🗓️ Calendário de Vencimentos")
@@ -963,22 +972,45 @@ if check_password():
                             df_dia = df[(df['tipo'] == 'Despesa') & (df['data_liquidacao'].dt.date == data_sel)]
                             
                             if not df_dia.empty:
+                                st.markdown("💡 **Dica:** Altere o **Status** diretamente na tabela abaixo e clique em Salvar.")
                                 df_dia_view = df_dia[['fornecedor', 'categoria', 'status', 'valor', 'observacao']].copy()
-                                st.dataframe(
+                                
+                                # --- NOVO BLOCO: TABELA DE EDIÇÃO RÁPIDA DE STATUS ---
+                                edited_dia = st.data_editor(
                                     df_dia_view,
                                     use_container_width=True,
+                                    hide_index=True,
                                     column_config={
-                                        "valor": st.column_config.NumberColumn("Valor (R$)", format="R$ %.2f")
-                                    },
-                                    hide_index=True
+                                        "status": st.column_config.SelectboxColumn("Status", options=["Pago", "A Pagar"], required=True),
+                                        "valor": st.column_config.NumberColumn("Valor (R$)", format="R$ %.2f", disabled=True),
+                                        "fornecedor": st.column_config.TextColumn("Fornecedor", disabled=True),
+                                        "categoria": st.column_config.TextColumn("Categoria", disabled=True),
+                                        "observacao": st.column_config.TextColumn("Observação", disabled=True)
+                                    }
                                 )
                                 
+                                mudancas_dict = {}
+                                for idx in df_dia_view.index:
+                                    if df_dia_view.at[idx, 'status'] != edited_dia.at[idx, 'status']:
+                                        mudancas_dict[idx] = {'status': edited_dia.at[idx, 'status']}
+                                
+                                if mudancas_dict:
+                                    if st.button(f"💾 Salvar {len(mudancas_dict)} Alteração(ões) de Status", type="primary"):
+                                        editar_multiplos_lancamentos(mudancas_dict)
+                                        st.success("Status atualizado com sucesso!")
+                                        time.sleep(1.5)
+                                        st.cache_data.clear()
+                                        st.rerun()
+
+                                # Cálculos atualizados baseados no estado visual (antes de salvar)
                                 total_dia = df_dia['valor'].sum()
-                                total_pendente = df_dia[df_dia['status'] == 'A Pagar']['valor'].sum()
+                                total_pendente_view = edited_dia[edited_dia['status'] == 'A Pagar']['valor'].sum()
                                 
                                 c1, c2 = st.columns(2)
                                 c1.metric("Total Agendado no Dia", f"R$ {total_dia:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-                                c2.metric("Total A Pagar (Pendente)", f"R$ {total_pendente:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), delta_color="inverse")
+                                c2.metric("Total A Pagar (Pendente)", f"R$ {total_pendente_view:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), delta_color="inverse")
+                                # -----------------------------------------------------
+
                             else:
                                 st.success("Nenhuma despesa lançada para este dia! 🎉")
 
