@@ -972,44 +972,74 @@ if check_password():
                             df_dia = df[(df['tipo'] == 'Despesa') & (df['data_liquidacao'].dt.date == data_sel)]
                             
                             if not df_dia.empty:
-                                st.markdown("💡 **Dica:** Altere o **Status** diretamente na tabela abaixo e clique em Salvar.")
-                                df_dia_view = df_dia[['fornecedor', 'categoria', 'status', 'valor', 'observacao']].copy()
+                                st.markdown("💡 **Dica:** Altere qualquer dado (Data, Status, Valor, Fornecedor, etc.) diretamente na tabela abaixo e clique em Salvar.")
                                 
-                                # --- NOVO BLOCO: TABELA DE EDIÇÃO RÁPIDA DE STATUS ---
+                                lista_fornecedores_cadastrados = carregar_lista_nomes_fornecedores()
+                                lista_categorias_cadastradas = carregar_lista_categorias()
+                                
+                                df_dia_view = df_dia[['data_liquidacao', 'fornecedor', 'categoria', 'status', 'valor', 'observacao']].copy()
+                                df_dia_view['data_liquidacao'] = pd.to_datetime(df_dia_view['data_liquidacao']).dt.date
+                                
+                                # --- NOVO BLOCO: TABELA DE EDIÇÃO RÁPIDA TOTAL ---
                                 edited_dia = st.data_editor(
                                     df_dia_view,
                                     use_container_width=True,
                                     hide_index=True,
                                     column_config={
+                                        "data_liquidacao": st.column_config.DateColumn("Data Liq.", format="DD/MM/YYYY", required=True),
                                         "status": st.column_config.SelectboxColumn("Status", options=["Pago", "A Pagar"], required=True),
-                                        "valor": st.column_config.NumberColumn("Valor (R$)", format="R$ %.2f", disabled=True),
-                                        "fornecedor": st.column_config.TextColumn("Fornecedor", disabled=True),
-                                        "categoria": st.column_config.TextColumn("Categoria", disabled=True),
-                                        "observacao": st.column_config.TextColumn("Observação", disabled=True)
+                                        "valor": st.column_config.NumberColumn("Valor (R$)", format="R$ %.2f", required=True),
+                                        "fornecedor": st.column_config.SelectboxColumn("Fornecedor", options=lista_fornecedores_cadastrados, required=True),
+                                        "categoria": st.column_config.SelectboxColumn("Categoria", options=lista_categorias_cadastradas, required=True),
+                                        "observacao": st.column_config.TextColumn("Observação")
                                     }
                                 )
                                 
                                 mudancas_dict = {}
                                 for idx in df_dia_view.index:
-                                    if df_dia_view.at[idx, 'status'] != edited_dia.at[idx, 'status']:
-                                        mudancas_dict[idx] = {'status': edited_dia.at[idx, 'status']}
+                                    linha_original = df_dia_view.loc[idx]
+                                    linha_editada = edited_dia.loc[idx]
+                                    
+                                    alteracoes_linha = {}
+                                    
+                                    if str(linha_original['data_liquidacao']) != str(linha_editada['data_liquidacao']):
+                                        alteracoes_linha['data_liquidacao'] = pd.to_datetime(linha_editada['data_liquidacao']).strftime("%Y-%m-%d")
+                                    
+                                    if linha_original['fornecedor'] != linha_editada['fornecedor']:
+                                        alteracoes_linha['fornecedor'] = linha_editada['fornecedor']
+                                        
+                                    if linha_original['categoria'] != linha_editada['categoria']:
+                                        alteracoes_linha['categoria'] = linha_editada['categoria']
+                                        
+                                    if linha_original['status'] != linha_editada['status']:
+                                        alteracoes_linha['status'] = linha_editada['status']
+                                        
+                                    if float(linha_original['valor']) != float(linha_editada['valor']):
+                                        alteracoes_linha['valor'] = float(linha_editada['valor'])
+                                        
+                                    obs_orig = "" if pd.isna(linha_original['observacao']) else str(linha_original['observacao'])
+                                    obs_edit = "" if pd.isna(linha_editada['observacao']) else str(linha_editada['observacao'])
+                                    if obs_orig != obs_edit:
+                                        alteracoes_linha['observacao'] = obs_edit
+                                        
+                                    if alteracoes_linha:
+                                        mudancas_dict[idx] = alteracoes_linha
                                 
                                 if mudancas_dict:
-                                    if st.button(f"💾 Salvar {len(mudancas_dict)} Alteração(ões) de Status", type="primary"):
+                                    if st.button(f"💾 Salvar {len(mudancas_dict)} Alteração(ões)", type="primary"):
                                         editar_multiplos_lancamentos(mudancas_dict)
-                                        st.success("Status atualizado com sucesso!")
+                                        st.success("Lançamento(s) atualizado(s) com sucesso!")
                                         time.sleep(1.5)
                                         st.cache_data.clear()
                                         st.rerun()
 
                                 # Cálculos atualizados baseados no estado visual (antes de salvar)
-                                total_dia = df_dia['valor'].sum()
+                                total_dia = edited_dia['valor'].sum()
                                 total_pendente_view = edited_dia[edited_dia['status'] == 'A Pagar']['valor'].sum()
                                 
                                 c1, c2 = st.columns(2)
                                 c1.metric("Total Agendado no Dia", f"R$ {total_dia:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
                                 c2.metric("Total A Pagar (Pendente)", f"R$ {total_pendente_view:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), delta_color="inverse")
-                                # -----------------------------------------------------
 
                             else:
                                 st.success("Nenhuma despesa lançada para este dia! 🎉")
