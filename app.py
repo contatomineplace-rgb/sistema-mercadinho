@@ -542,7 +542,7 @@ if check_password():
             df_dados = carregar_dados()
             if not df_dados.empty:
                 df_dados['valor'] = pd.to_numeric(df_dados['valor'])
-                df_dados['data_liquidacao'] = pd.to_datetime(df_dados['data_liquidacao'])
+                df_dados['data_liquidacao'] = pd.to_datetime(df_dados['data_liquidacao'], errors='coerce')
                 
                 col_f1, col_f2, col_f3 = st.columns(3)
                 with col_f1:
@@ -1302,3 +1302,4 @@ if check_password():
                 st.success("Lista de classificações atualizada com sucesso!")
                 st.cache_data.clear()
                 st.rerun()
+
