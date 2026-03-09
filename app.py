@@ -732,7 +732,7 @@ if check_password():
         
         if not df.empty:
             df['valor'] = pd.to_numeric(df['valor'])
-            df['data_liquidacao'] = pd.to_datetime(df['data_liquidacao'])
+            df['data_liquidacao'] = pd.to_datetime(df['data_liquidacao'], errors='coerce')
             df['ano_comp'] = df['competencia'].str[:4]
             df['mes_comp_num'] = df['competencia'].str[5:].astype(int)
             df['mes_comp_nome'] = df['mes_comp_num'].map(MESES_PT)
@@ -1302,4 +1302,5 @@ if check_password():
                 st.success("Lista de classificações atualizada com sucesso!")
                 st.cache_data.clear()
                 st.rerun()
+
 
