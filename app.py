@@ -737,8 +737,12 @@ if check_password():
             df['mes_comp_num'] = df['competencia'].str[5:].astype(int)
             df['mes_comp_nome'] = df['mes_comp_num'].map(MESES_PT)
 
-            # Abas para separar o Dashboard do Calendário
-            tab_dash, tab_calendario = st.tabs(["📊 Dashboard e Extrato", "📅 Calendário de Vencimentos (A Pagar)"])
+            # Abas para separar o Dashboard, Calendário e DRE
+            tab_dash, tab_calendario, tab_contabil = st.tabs([
+                "📊 Dashboard e Extrato", 
+                "📅 Calendário de Vencimentos (A Pagar)", 
+                "📋 Visão Contábil (DRE p/ Contador)"
+            ])
 
             with tab_dash:
                 st.sidebar.markdown("### Filtros do Relatório")
@@ -1044,6 +1048,77 @@ if check_password():
                             else:
                                 st.success("Nenhuma despesa lançada para este dia! 🎉")
 
+            with tab_contabil:
+                st.subheader("📋 Demonstração do Resultado do Exercício (DRE) e Dados Tributários")
+                st.markdown("Esta visão agrupa os lançamentos para facilitar o planejamento tributário pelo seu contador (Simples Nacional, Lucro Presumido ou Real).")
+                
+                # O contador geralmente avalia anos fechados ou o ano corrente inteiro
+                ano_dre = st.selectbox("Selecione o Ano Base para Análise Contábil", sorted(df['ano_comp'].dropna().unique(), reverse=True), key="sel_ano_dre")
+                
+                df_dre = df[df['ano_comp'] == ano_dre].copy()
+                
+                if not df_dre.empty:
+                    # Agrupamento Lógico de Categorias para o Contador
+                    cats_folha = ["Salário", "13° Salário", "Férias", "INSS", "FGTS", "Vale Alimentação", "Mão de obra"]
+                    cats_impostos = ["Simples Nacional"]
+                    cats_cpv = ["Mercadoria", "Frete"] # Custo do Produto Vendido
+                    
+                    # Totais Anuais
+                    receita_bruta = df_dre[(df_dre['tipo'] == 'Receita')]['valor'].sum()
+                    custo_mercadorias = df_dre[(df_dre['tipo'] == 'Despesa') & (df_dre['categoria'].isin(cats_cpv))]['valor'].sum()
+                    despesas_folha = df_dre[(df_dre['tipo'] == 'Despesa') & (df_dre['categoria'].isin(cats_folha))]['valor'].sum()
+                    impostos = df_dre[(df_dre['tipo'] == 'Despesa') & (df_dre['categoria'].isin(cats_impostos))]['valor'].sum()
+                    outras_despesas = df_dre[(df_dre['tipo'] == 'Despesa') & (~df_dre['categoria'].isin(cats_cpv + cats_folha + cats_impostos))]['valor'].sum()
+                    
+                    lucro_bruto = receita_bruta - custo_mercadorias
+                    lucro_liquido = lucro_bruto - despesas_folha - impostos - outras_despesas
+                    
+                    margem_lucro = (lucro_liquido / receita_bruta * 100) if receita_bruta > 0 else 0
+                    
+                    st.markdown(f"### Resumo Anual ({ano_dre})")
+                    col_dre1, col_dre2, col_dre3, col_dre4 = st.columns(4)
+                    col_dre1.metric("1. Faturamento Bruto", f"R$ {receita_bruta:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+                    col_dre2.metric("2. Custos (Mercadorias/Frete)", f"R$ {custo_mercadorias:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), delta_color="inverse")
+                    col_dre3.metric("3. Despesas (Folha + Operacional)", f"R$ {(despesas_folha + outras_despesas):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), delta_color="inverse")
+                    col_dre4.metric("4. Lucro Líquido", f"R$ {lucro_liquido:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), f"Margem: {margem_lucro:.1f}%")
+                    
+                    st.markdown("---")
+                    st.markdown("### DRE Mensalizada (Exportável)")
+                    
+                    # Criação de uma tabela pivot (meses nas colunas, contas nas linhas)
+                    df_dre['conta_contabil'] = 'Outras Despesas Operacionais'
+                    df_dre.loc[df_dre['tipo'] == 'Receita', 'conta_contabil'] = '1. Receita Bruta'
+                    df_dre.loc[(df_dre['tipo'] == 'Despesa') & (df_dre['categoria'].isin(cats_cpv)), 'conta_contabil'] = '2. Custo das Mercadorias (CPV)'
+                    df_dre.loc[(df_dre['tipo'] == 'Despesa') & (df_dre['categoria'].isin(cats_folha)), 'conta_contabil'] = '3. Despesas com Folha/RH'
+                    df_dre.loc[(df_dre['tipo'] == 'Despesa') & (df_dre['categoria'].isin(cats_impostos)), 'conta_contabil'] = '4. Impostos Recolhidos'
+                    df_dre.loc[(df_dre['tipo'] == 'Despesa') & (df_dre['conta_contabil'] == 'Outras Despesas Operacionais'), 'conta_contabil'] = '5. Outras Despesas Operacionais'
+                    
+                    # Agrupar por conta e mês
+                    dre_pivot = pd.pivot_table(
+                        df_dre, 
+                        values='valor', 
+                        index='conta_contabil', 
+                        columns='mes_comp_num', 
+                        aggfunc='sum', 
+                        fill_value=0
+                    )
+                    
+                    # Renomear as colunas de números para o nome do mês
+                    dre_pivot.columns = [MESES_PT[col] for col in dre_pivot.columns]
+                    
+                    # Adicionar coluna de Total
+                    dre_pivot['TOTAL ANUAL'] = dre_pivot.sum(axis=1)
+                    
+                    # Exibir tabela interativa (o contador pode clicar no ícone de download no canto da tabela)
+                    st.dataframe(
+                        dre_pivot.style.format("R$ {:,.2f}"),
+                        use_container_width=True
+                    )
+                    
+                    st.info("💡 **Dica para o Contador:** Passe o mouse sobre a tabela acima e clique no ícone de download (flecha apontando para baixo) no canto superior direito para exportar esta DRE como um arquivo CSV e abrir no Excel.")
+                else:
+                    st.warning(f"Não há lançamentos registrados no ano de {ano_dre}.")
+
         else:
             st.info("Nenhum dado lançado ainda.")
 
@@ -1302,5 +1377,3 @@ if check_password():
                 st.success("Lista de classificações atualizada com sucesso!")
                 st.cache_data.clear()
                 st.rerun()
-
-
