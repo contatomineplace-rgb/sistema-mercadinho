@@ -44,7 +44,8 @@ def carregar_dados():
 def carregar_fornecedores_df():
     try:
         df = conn.read(worksheet="fornecedores", ttl=600)
-        colunas_necessarias = ['nome', 'cnpj', 'telefone', 'login_app', 'senha_app']
+        # Adicionado o campo 'categoria_padrao'
+        colunas_necessarias = ['nome', 'cnpj', 'telefone', 'login_app', 'senha_app', 'categoria_padrao']
         for col in colunas_necessarias:
             if col not in df.columns:
                 df[col] = pd.Series(dtype='str')
@@ -52,21 +53,33 @@ def carregar_fornecedores_df():
         df = df.astype(str)
         return df
     except Exception as e:
-        return pd.DataFrame(columns=['nome', 'cnpj', 'telefone', 'login_app', 'senha_app'])
+        return pd.DataFrame(columns=['nome', 'cnpj', 'telefone', 'login_app', 'senha_app', 'categoria_padrao'])
 
 def carregar_lista_nomes_fornecedores():
     df = carregar_fornecedores_df()
     return df['nome'].dropna().unique().tolist()
 
+def obter_dict_forn_cat():
+    """Retorna um dicionário vinculando fornecedor à sua categoria padrão"""
+    df_f = carregar_fornecedores_df()
+    d = {}
+    if not df_f.empty and 'categoria_padrao' in df_f.columns:
+        for _, r in df_f.iterrows():
+            fn = str(r['nome']).strip()
+            fc = str(r.get('categoria_padrao', '')).strip()
+            if fn and fc and fc != 'nan':
+                d[fn] = fc
+    return d
+
 def salvar_fornecedor_rapido(novo_nome):
     try:
         df = conn.read(worksheet="fornecedores", ttl=0)
         if novo_nome and novo_nome.strip().lower() not in df['nome'].dropna().str.lower().values:
-            novo_registro = pd.DataFrame([{"nome": novo_nome, "cnpj": "", "telefone": "", "login_app": "", "senha_app": ""}])
+            novo_registro = pd.DataFrame([{"nome": novo_nome, "cnpj": "", "telefone": "", "login_app": "", "senha_app": "", "categoria_padrao": ""}])
             df_atualizado = pd.concat([df, novo_registro], ignore_index=True)
             conn.update(worksheet="fornecedores", data=df_atualizado)
     except:
-        novo_registro = pd.DataFrame([{"nome": novo_nome, "cnpj": "", "telefone": "", "login_app": "", "senha_app": ""}])
+        novo_registro = pd.DataFrame([{"nome": novo_nome, "cnpj": "", "telefone": "", "login_app": "", "senha_app": "", "categoria_padrao": ""}])
         conn.update(worksheet="fornecedores", data=novo_registro)
 
 def salvar_tabela_fornecedores(df_editado):
@@ -145,7 +158,6 @@ def editar_lancamento(indice, novos_dados):
         st.error(f"Erro ao editar: {e}")
 
 def editar_multiplos_lancamentos(atualizacoes_dict):
-    """Função otimizada para salvar múltiplas edições no Google Sheets de uma só vez"""
     try:
         df = conn.read(worksheet="lancamentos", ttl=0)
         for indice, novos_dados in atualizacoes_dict.items():
@@ -184,6 +196,16 @@ def formatar_input_br(key):
 def atualizar_data_liq():
     if st.session_state.get("check_repetir_data") and "memoria_data_liq" in st.session_state:
         st.session_state["data_liq_desp"] = st.session_state["memoria_data_liq"]
+
+def auto_preencher_cat_individual():
+    """Preenche a categoria automaticamente no Lançamento Individual se houver vínculo."""
+    d = obter_dict_forn_cat()
+    f = st.session_state.get("sel_forn")
+    if f and f in d:
+        c = d[f]
+        cats = carregar_lista_categorias()
+        if c in cats:
+            st.session_state["cat_desp"] = c
 
 # --- FUNÇÕES DE AUTENTICAÇÃO E LOGIN ---
 def gerar_token_auth():
@@ -282,8 +304,10 @@ if check_password():
             with col2:
                 lista_fornecedores = carregar_lista_nomes_fornecedores()
                 usar_novo_fornecedor = st.checkbox("Cadastrar Novo Fornecedor?", key="check_novo_forn")
-                if usar_novo_fornecedor: fornecedor = st.text_input("Digite o nome do novo fornecedor", key="txt_novo_forn")
-                else: fornecedor = st.selectbox("Selecione o Fornecedor", [""] + lista_fornecedores, index=None, placeholder="Selecione o Fornecedor", key="sel_forn")
+                if usar_novo_fornecedor: 
+                    fornecedor = st.text_input("Digite o nome do novo fornecedor", key="txt_novo_forn")
+                else: 
+                    fornecedor = st.selectbox("Selecione o Fornecedor", [""] + lista_fornecedores, index=None, placeholder="Selecione o Fornecedor", key="sel_forn", on_change=auto_preencher_cat_individual)
                 
                 lista_categorias = carregar_lista_categorias()
                 categoria = st.selectbox("Classificação", lista_categorias, index=None, placeholder="Selecione a Categoria", key="cat_desp")
@@ -330,7 +354,7 @@ if check_password():
 
         # === 2. LANÇAMENTO EM LOTE ===
         with tab_lote:
-            st.info("💡 **Dica:** Copie e cole do Excel. O valor será formatado automaticamente na tabela.")
+            st.info("💡 **Dica de Produtividade:** Ao selecionar um fornecedor, o sistema preencherá a Classificação automaticamente se houver um padrão configurado (Ajuste isso no menu Configurações).")
             
             with st.expander("➕ O Fornecedor não está na lista? Cadastre aqui."):
                 c_fn1, c_fn2 = st.columns([3, 1])
@@ -367,15 +391,19 @@ if check_password():
             lista_anos = gerar_lista_anos()
             lista_fornecedores_cadastrados = carregar_lista_nomes_fornecedores()
             lista_categorias_cadastradas = carregar_lista_categorias()
+            d_forn_cat = obter_dict_forn_cat()
             
-            linhas_iniciais = [{
-                "valor": None, "data_liquidacao": None, "mes_competencia": None, "ano_competencia": None,
-                "fornecedor": None, "categoria": None, "observacao": "", "status": None
-            } for _ in range(10)]
-            df_template = pd.DataFrame(linhas_iniciais)
+            # Gerenciamento de Estado da Planilha para Auto-preenchimento
+            if "df_lote" not in st.session_state:
+                linhas_iniciais = [{
+                    "valor": None, "data_liquidacao": None, "mes_competencia": None, "ano_competencia": None,
+                    "fornecedor": None, "categoria": None, "observacao": "", "status": None
+                } for _ in range(10)]
+                st.session_state.df_lote = pd.DataFrame(linhas_iniciais)
 
             lote_editado = st.data_editor(
-                df_template,
+                st.session_state.df_lote,
+                key="editor_lote",
                 num_rows="dynamic",
                 use_container_width=True,
                 column_config={
@@ -390,6 +418,28 @@ if check_password():
                 },
                 hide_index=True
             )
+
+            # --- LÓGICA DE AUTO-PREENCHIMENTO DE CATEGORIA ---
+            mudou_lote = False
+            df_verificacao = lote_editado.copy()
+            
+            for idx, row in df_verificacao.iterrows():
+                f = str(row['fornecedor']).strip() if pd.notna(row['fornecedor']) else ""
+                c = str(row['categoria']).strip() if pd.notna(row['categoria']) else ""
+                
+                # Se tem fornecedor, mas não tem categoria, aplica a sugestão padrão
+                if f and not c:
+                    cat_sug = d_forn_cat.get(f, "")
+                    if cat_sug and cat_sug in lista_categorias_cadastradas:
+                        df_verificacao.at[idx, 'categoria'] = cat_sug
+                        mudou_lote = True
+
+            # Se houve alguma alteração automática, nós resetamos o editor para mostrar o preenchimento
+            if mudou_lote:
+                st.session_state.df_lote = df_verificacao
+                if "editor_lote" in st.session_state:
+                    del st.session_state["editor_lote"]
+                st.rerun()
 
             if st.button("💾 Salvar Lote de Despesas"):
                 if lote_editado.empty:
@@ -431,6 +481,11 @@ if check_password():
                     if lista_dados_finais and not erro_encontrado:
                         salvar_lote_lancamentos(pd.DataFrame(lista_dados_finais))
                         st.success(f"{len(lista_dados_finais)} despesas salvas com sucesso!")
+                        # Limpando o formulário para a próxima vez
+                        if "df_lote" in st.session_state:
+                            del st.session_state["df_lote"]
+                        if "editor_lote" in st.session_state:
+                            del st.session_state["editor_lote"]
                         time.sleep(2)
                         st.cache_data.clear()
                         st.rerun()
@@ -450,7 +505,7 @@ if check_password():
             3. **`mes_competencia`**: Nome do mês por extenso (ex: Janeiro).
             4. **`ano_competencia`**: Ano com 4 dígitos (ex: 2026).
             5. **`fornecedor`**: Nome do fornecedor (novos serão cadastrados automaticamente).
-            6. **`categoria`**: Classificação (ex: Mercadoria, Celular, etc - novas serão cadastradas automaticamente).
+            6. **`categoria`**: Classificação (Opcional: Se deixar em branco, o sistema preencherá com a Categoria Padrão).
             7. **`status`**: Preencher com 'Pago' ou 'A Pagar'.
             8. **`observacao`**: Opcional.
             """)
@@ -476,6 +531,7 @@ if check_password():
                                 df_cat_atual = carregar_categorias_df()
                                 nomes_cat_existentes = set(df_cat_atual['nome'].dropna().str.lower().values)
                                 
+                                d_forn_cat_import = obter_dict_forn_cat()
                                 lista_dados_finais = []
 
                                 for index, row in df_import.iterrows():
@@ -487,7 +543,11 @@ if check_password():
                                         salvar_fornecedor_rapido(nome_forn)
                                         nomes_forn_existentes.add(nome_forn.lower())
 
-                                    cat_str = str(row.get('categoria', 'Outros')).strip()
+                                    cat_str = str(row.get('categoria', '')).strip()
+                                    # Se a categoria estiver em branco, usa a vinculação padrão ou joga pra "Outros"
+                                    if not cat_str or cat_str.lower() == 'nan':
+                                        cat_str = d_forn_cat_import.get(nome_forn, 'Outros')
+
                                     if cat_str.lower() not in nomes_cat_existentes:
                                         salvar_categoria_rapida(cat_str)
                                         nomes_cat_existentes.add(cat_str.lower())
@@ -816,7 +876,6 @@ if check_password():
                 df_extrato_view.insert(0, "🗑️ Excluir", False)
                 df_sorted = df_extrato_view.sort_values("data_liquidacao", ascending=False)
                 
-                # Transformar as datas para o formato que o st.data_editor aceita sem bugar fuso horário
                 df_sorted['data_liquidacao'] = pd.to_datetime(df_sorted['data_liquidacao']).dt.date
                 
                 lista_forn = carregar_lista_nomes_fornecedores()
@@ -980,7 +1039,6 @@ if check_password():
                                 df_dia_view = df_dia[['data_liquidacao', 'fornecedor', 'categoria', 'status', 'valor', 'observacao']].copy()
                                 df_dia_view['data_liquidacao'] = pd.to_datetime(df_dia_view['data_liquidacao']).dt.date
                                 
-                                # --- TABELA DE EDIÇÃO RÁPIDA ---
                                 edited_dia = st.data_editor(
                                     df_dia_view,
                                     use_container_width=True,
@@ -1029,7 +1087,6 @@ if check_password():
                                         st.cache_data.clear()
                                         st.rerun()
 
-                                # Cálculos atualizados baseados no estado visual
                                 total_dia = edited_dia['valor'].sum()
                                 total_pendente_view = edited_dia[edited_dia['status'] == 'A Pagar']['valor'].sum()
                                 
@@ -1102,14 +1159,10 @@ if check_password():
                 else:
                     st.warning(f"Não há lançamentos registrados no ano de {ano_dre}.")
 
-            # ==========================================
-            # NOVA ABA DESPESAS POR CATEGORIA EDITÁVEL E CLARA
-            # ==========================================
             with tab_cat_detalhe:
                 st.subheader("📑 Detalhamento de Despesas por Categoria")
                 st.markdown("Visualize suas despesas agrupadas por classificação e faça edições rápidas.")
 
-                # Filtros específicos da aba mais claros
                 c_f1, c_f2, c_f3 = st.columns(3)
                 
                 anos_cat = sorted(df[df['tipo'] == 'Despesa']['ano_comp'].dropna().unique(), reverse=True)
@@ -1122,7 +1175,6 @@ if check_password():
                 categorias_existentes = sorted(df[df['tipo'] == 'Despesa']['categoria'].dropna().unique())
                 cat_filtro_sel = c_f3.selectbox("Filtrar por Categoria", ["Todas"] + list(categorias_existentes), key="cat_filtro_sel")
 
-                # Filtrando os dados
                 df_cat_view = df[df['tipo'] == 'Despesa'].copy()
                 if ano_cat_sel != "Todos":
                     df_cat_view = df_cat_view[df_cat_view['ano_comp'] == ano_cat_sel]
@@ -1132,7 +1184,6 @@ if check_password():
                     df_cat_view = df_cat_view[df_cat_view['categoria'] == cat_filtro_sel]
 
                 if not df_cat_view.empty:
-                    # Tabela 1: Resumo agrupado
                     df_resumo = df_cat_view.groupby('categoria')['valor'].sum().reset_index()
                     df_resumo.columns = ['Categoria', 'Total (R$)']
                     df_resumo = df_resumo.sort_values('Total (R$)', ascending=False)
@@ -1144,7 +1195,6 @@ if check_password():
                     st.markdown("### Lançamentos Detalhados (Editáveis)")
                     st.markdown("💡 **Dica:** Altere os dados diretamente na tabela e clique no botão Salvar que aparecerá embaixo. Para excluir, marque a caixinha na primeira coluna.")
                     
-                    # Preparando a tabela editável
                     df_detalhe_edit = df_cat_view.copy()
                     df_detalhe_edit.insert(0, "🗑️ Excluir", False)
                     df_detalhe_edit['data_liquidacao'] = pd.to_datetime(df_detalhe_edit['data_liquidacao']).dt.date
@@ -1230,7 +1280,6 @@ if check_password():
                                     st.cache_data.clear()
                                     st.rerun()
 
-                    # --- GERAÇÃO DO ARQUIVO EXCEL ---
                     df_export = df_cat_view[['data_liquidacao', 'categoria', 'fornecedor', 'observacao', 'status', 'valor']].copy()
                     df_export.columns = ['Data Liq.', 'Categoria', 'Fornecedor', 'Observação', 'Status', 'Valor (R$)']
                     df_export['Data Liq.'] = pd.to_datetime(df_export['Data Liq.']).dt.strftime('%d/%m/%Y')
@@ -1472,8 +1521,10 @@ if check_password():
         
         with tab_fornecedores:
             st.subheader("Gerenciar Fornecedores")
-            st.info("Edite os nomes e dados de acesso. Clique em 'Salvar Alterações' para confirmar.")
+            st.info("Edite os nomes e dados de acesso. Para facilitar os lançamentos, vincule uma 'Classificação Padrão' aos fornecedores mais recorrentes.")
             df_fornecedores = carregar_fornecedores_df()
+            lista_cats_config = carregar_lista_categorias()
+            
             df_editado = st.data_editor(
                 df_fornecedores,
                 num_rows="dynamic", 
@@ -1482,7 +1533,8 @@ if check_password():
                     "cnpj": st.column_config.TextColumn("CNPJ"),
                     "telefone": st.column_config.TextColumn("Telefone"),
                     "login_app": st.column_config.TextColumn("Login App"),
-                    "senha_app": st.column_config.TextColumn("Senha App")
+                    "senha_app": st.column_config.TextColumn("Senha App"),
+                    "categoria_padrao": st.column_config.SelectboxColumn("Classificação Padrão (Auto-preenchimento)", options=[""] + lista_cats_config)
                 },
                 use_container_width=True,
                 hide_index=True
