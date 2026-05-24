@@ -807,7 +807,7 @@ if check_password():
                     st.info("Sem dados para exibir nos gráficos com os filtros atuais.")
 
                 # ==========================================
-                # NOVO BLOCO: EXTRATO EDITÁVEL EM MASSA
+                # EXTRATO EDITÁVEL EM MASSA
                 # ==========================================
                 st.subheader("Extrato Detalhado Interativo")
                 st.markdown("💡 **Dica:** Altere qualquer dado diretamente na tabela abaixo e clique no botão de Salvar que aparecerá. Para excluir lançamentos, marque a caixinha na primeira coluna.")
@@ -828,7 +828,6 @@ if check_password():
                     df_sorted, 
                     use_container_width=True,
                     hide_index=True,
-                    # Desabilitar as colunas técnicas que o sistema preenche sozinho
                     disabled=["data_registro", "tipo", "competencia", "mes_comp_num"],
                     column_config={
                         "🗑️ Excluir": st.column_config.CheckboxColumn("Excluir?", required=True),
@@ -847,16 +846,13 @@ if check_password():
                     }
                 )
 
-                # Dicionário para armazenar as mudanças e lista para exclusões
                 mudancas_dict = {}
                 linhas_para_excluir = []
 
-                # Percorrer o dataframe para identificar o que mudou
                 for idx in df_sorted.index:
                     linha_original = df_sorted.loc[idx]
                     linha_editada = editor_extrato.loc[idx]
 
-                    # Prioridade para Exclusão
                     if linha_editada["🗑️ Excluir"]:
                         linhas_para_excluir.append(idx)
                         continue
@@ -865,20 +861,14 @@ if check_password():
                     
                     if str(linha_original['data_liquidacao']) != str(linha_editada['data_liquidacao']):
                         alteracoes_linha['data_liquidacao'] = pd.to_datetime(linha_editada['data_liquidacao']).strftime("%Y-%m-%d")
-                        
                     if str(linha_original['fornecedor']) != str(linha_editada['fornecedor']):
                         alteracoes_linha['fornecedor'] = linha_editada['fornecedor']
-                        
                     if str(linha_original['categoria']) != str(linha_editada['categoria']):
                         alteracoes_linha['categoria'] = linha_editada['categoria']
-                        
                     if str(linha_original['status']) != str(linha_editada['status']):
                         alteracoes_linha['status'] = linha_editada['status']
-                        
                     if float(linha_original['valor']) != float(linha_editada['valor']):
                         alteracoes_linha['valor'] = float(linha_editada['valor'])
-                        
-                    # Se o ano ou mês de competência mudar, atualizamos a coluna invisível 'competencia'
                     if str(linha_original['mes_comp_nome']) != str(linha_editada['mes_comp_nome']) or str(linha_original['ano_comp']) != str(linha_editada['ano_comp']):
                         mes_num = MESES_PT_INV[linha_editada['mes_comp_nome']]
                         nova_comp = f"{linha_editada['ano_comp']}-{mes_num:02d}"
@@ -892,7 +882,6 @@ if check_password():
                     if alteracoes_linha:
                         mudancas_dict[idx] = alteracoes_linha
 
-                # Se houver mudanças ou deleções, mostramos os botões dinamicamente
                 if mudancas_dict or linhas_para_excluir:
                     st.markdown("---")
                     c_btn1, c_btn2 = st.columns(2)
@@ -991,7 +980,7 @@ if check_password():
                                 df_dia_view = df_dia[['data_liquidacao', 'fornecedor', 'categoria', 'status', 'valor', 'observacao']].copy()
                                 df_dia_view['data_liquidacao'] = pd.to_datetime(df_dia_view['data_liquidacao']).dt.date
                                 
-                                # --- NOVO BLOCO: TABELA DE EDIÇÃO RÁPIDA TOTAL ---
+                                # --- TABELA DE EDIÇÃO RÁPIDA ---
                                 edited_dia = st.data_editor(
                                     df_dia_view,
                                     use_container_width=True,
@@ -1015,16 +1004,12 @@ if check_password():
                                     
                                     if str(linha_original['data_liquidacao']) != str(linha_editada['data_liquidacao']):
                                         alteracoes_linha['data_liquidacao'] = pd.to_datetime(linha_editada['data_liquidacao']).strftime("%Y-%m-%d")
-                                    
                                     if linha_original['fornecedor'] != linha_editada['fornecedor']:
                                         alteracoes_linha['fornecedor'] = linha_editada['fornecedor']
-                                        
                                     if linha_original['categoria'] != linha_editada['categoria']:
                                         alteracoes_linha['categoria'] = linha_editada['categoria']
-                                        
                                     if linha_original['status'] != linha_editada['status']:
                                         alteracoes_linha['status'] = linha_editada['status']
-                                        
                                     if float(linha_original['valor']) != float(linha_editada['valor']):
                                         alteracoes_linha['valor'] = float(linha_editada['valor'])
                                         
@@ -1044,7 +1029,7 @@ if check_password():
                                         st.cache_data.clear()
                                         st.rerun()
 
-                                # Cálculos atualizados baseados no estado visual (antes de salvar)
+                                # Cálculos atualizados baseados no estado visual
                                 total_dia = edited_dia['valor'].sum()
                                 total_pendente_view = edited_dia[edited_dia['status'] == 'A Pagar']['valor'].sum()
                                 
@@ -1059,18 +1044,15 @@ if check_password():
                 st.subheader("📋 Demonstração do Resultado do Exercício (DRE) e Dados Tributários")
                 st.markdown("Esta visão agrupa os lançamentos para facilitar o planejamento tributário pelo seu contador (Simples Nacional, Lucro Presumido ou Real).")
                 
-                # O contador geralmente avalia anos fechados ou o ano corrente inteiro
                 ano_dre = st.selectbox("Selecione o Ano Base para Análise Contábil", sorted(df['ano_comp'].dropna().unique(), reverse=True), key="sel_ano_dre")
                 
                 df_dre = df[df['ano_comp'] == ano_dre].copy()
                 
                 if not df_dre.empty:
-                    # Agrupamento Lógico de Categorias para o Contador
                     cats_folha = ["Salário", "13° Salário", "Férias", "INSS", "FGTS", "Vale Alimentação", "Mão de obra"]
                     cats_impostos = ["Simples Nacional"]
-                    cats_cpv = ["Mercadoria", "Frete"] # Custo do Produto Vendido
+                    cats_cpv = ["Mercadoria", "Frete"] 
                     
-                    # Totais Anuais
                     receita_bruta = df_dre[(df_dre['tipo'] == 'Receita')]['valor'].sum()
                     custo_mercadorias = df_dre[(df_dre['tipo'] == 'Despesa') & (df_dre['categoria'].isin(cats_cpv))]['valor'].sum()
                     despesas_folha = df_dre[(df_dre['tipo'] == 'Despesa') & (df_dre['categoria'].isin(cats_folha))]['valor'].sum()
@@ -1092,7 +1074,6 @@ if check_password():
                     st.markdown("---")
                     st.markdown("### DRE Mensalizada (Exportável)")
                     
-                    # Criação de uma tabela pivot (meses nas colunas, contas nas linhas)
                     df_dre['conta_contabil'] = 'Outras Despesas Operacionais'
                     df_dre.loc[df_dre['tipo'] == 'Receita', 'conta_contabil'] = '1. Receita Bruta'
                     df_dre.loc[(df_dre['tipo'] == 'Despesa') & (df_dre['categoria'].isin(cats_cpv)), 'conta_contabil'] = '2. Custo das Mercadorias (CPV)'
@@ -1100,7 +1081,6 @@ if check_password():
                     df_dre.loc[(df_dre['tipo'] == 'Despesa') & (df_dre['categoria'].isin(cats_impostos)), 'conta_contabil'] = '4. Impostos Recolhidos'
                     df_dre.loc[(df_dre['tipo'] == 'Despesa') & (df_dre['conta_contabil'] == 'Outras Despesas Operacionais'), 'conta_contabil'] = '5. Outras Despesas Operacionais'
                     
-                    # Agrupar por conta e mês
                     dre_pivot = pd.pivot_table(
                         df_dre, 
                         values='valor', 
@@ -1110,13 +1090,9 @@ if check_password():
                         fill_value=0
                     )
                     
-                    # Renomear as colunas de números para o nome do mês
                     dre_pivot.columns = [MESES_PT[col] for col in dre_pivot.columns]
-                    
-                    # Adicionar coluna de Total
                     dre_pivot['TOTAL ANUAL'] = dre_pivot.sum(axis=1)
                     
-                    # Exibir tabela interativa
                     st.dataframe(
                         dre_pivot.style.format("R$ {:,.2f}"),
                         use_container_width=True
@@ -1126,18 +1102,25 @@ if check_password():
                 else:
                     st.warning(f"Não há lançamentos registrados no ano de {ano_dre}.")
 
+            # ==========================================
+            # NOVA ABA DESPESAS POR CATEGORIA EDITÁVEL E CLARA
+            # ==========================================
             with tab_cat_detalhe:
                 st.subheader("📑 Detalhamento de Despesas por Categoria")
-                st.markdown("Visualize suas despesas agrupadas por classificação e baixe um relatório formatado em Excel.")
+                st.markdown("Visualize suas despesas agrupadas por classificação e faça edições rápidas.")
 
-                # Filtros específicos da aba para facilitar a exportação
-                c_f1, c_f2 = st.columns(2)
+                # Filtros específicos da aba mais claros
+                c_f1, c_f2, c_f3 = st.columns(3)
+                
                 anos_cat = sorted(df[df['tipo'] == 'Despesa']['ano_comp'].dropna().unique(), reverse=True)
                 if not anos_cat: anos_cat = [str(datetime.today().year)]
-                ano_cat_sel = c_f1.selectbox("Filtrar por Ano", ["Todos"] + list(anos_cat), key="ano_cat_sel")
+                ano_cat_sel = c_f1.selectbox("Ano de Competência", ["Todos"] + list(anos_cat), key="ano_cat_sel")
 
                 meses_cat = list(MESES_PT.values())
-                mes_cat_sel = c_f2.selectbox("Filtrar por Mês", ["Todos"] + meses_cat, key="mes_cat_sel")
+                mes_cat_sel = c_f2.selectbox("Mês de Competência", ["Todos"] + meses_cat, key="mes_cat_sel")
+                
+                categorias_existentes = sorted(df[df['tipo'] == 'Despesa']['categoria'].dropna().unique())
+                cat_filtro_sel = c_f3.selectbox("Filtrar por Categoria", ["Todas"] + list(categorias_existentes), key="cat_filtro_sel")
 
                 # Filtrando os dados
                 df_cat_view = df[df['tipo'] == 'Despesa'].copy()
@@ -1145,6 +1128,8 @@ if check_password():
                     df_cat_view = df_cat_view[df_cat_view['ano_comp'] == ano_cat_sel]
                 if mes_cat_sel != "Todos":
                     df_cat_view = df_cat_view[df_cat_view['mes_comp_nome'] == mes_cat_sel]
+                if cat_filtro_sel != "Todas":
+                    df_cat_view = df_cat_view[df_cat_view['categoria'] == cat_filtro_sel]
 
                 if not df_cat_view.empty:
                     # Tabela 1: Resumo agrupado
@@ -1152,23 +1137,109 @@ if check_password():
                     df_resumo.columns = ['Categoria', 'Total (R$)']
                     df_resumo = df_resumo.sort_values('Total (R$)', ascending=False)
 
-                    # Tabela 2: Lançamentos detalhados
-                    df_detalhe = df_cat_view[['data_liquidacao', 'categoria', 'fornecedor', 'observacao', 'status', 'valor']].copy()
-                    df_detalhe.columns = ['Data', 'Categoria', 'Fornecedor', 'Observação', 'Status', 'Valor (R$)']
-                    df_detalhe['Data'] = pd.to_datetime(df_detalhe['Data']).dt.strftime('%d/%m/%Y')
-                    df_detalhe = df_detalhe.sort_values(['Categoria', 'Data'])
-
                     st.markdown("### Resumo por Categoria")
                     st.dataframe(df_resumo.style.format({'Total (R$)': 'R$ {:,.2f}'}), use_container_width=True, hide_index=True)
 
-                    st.markdown("### Lançamentos Detalhados")
-                    st.dataframe(df_detalhe.style.format({'Valor (R$)': 'R$ {:,.2f}'}), use_container_width=True, hide_index=True)
+                    st.markdown("---")
+                    st.markdown("### Lançamentos Detalhados (Editáveis)")
+                    st.markdown("💡 **Dica:** Altere os dados diretamente na tabela e clique no botão Salvar que aparecerá embaixo. Para excluir, marque a caixinha na primeira coluna.")
+                    
+                    # Preparando a tabela editável
+                    df_detalhe_edit = df_cat_view.copy()
+                    df_detalhe_edit.insert(0, "🗑️ Excluir", False)
+                    df_detalhe_edit['data_liquidacao'] = pd.to_datetime(df_detalhe_edit['data_liquidacao']).dt.date
+                    df_detalhe_edit = df_detalhe_edit.sort_values(['categoria', 'data_liquidacao'])
+                    
+                    lista_forn_cat = carregar_lista_nomes_fornecedores()
+                    lista_cats_cat = carregar_lista_categorias()
+                    lista_anos_comp_cat = gerar_lista_anos()
+                    lista_meses_comp_cat = list(MESES_PT.values())
+                    
+                    editor_cat = st.data_editor(
+                        df_detalhe_edit,
+                        use_container_width=True,
+                        hide_index=True,
+                        disabled=["data_registro", "tipo", "competencia", "mes_comp_num"],
+                        column_config={
+                            "🗑️ Excluir": st.column_config.CheckboxColumn("Excluir?", required=True),
+                            "data_liquidacao": st.column_config.DateColumn("Data Liq.", format="DD/MM/YYYY"),
+                            "categoria": st.column_config.SelectboxColumn("Categoria", options=lista_cats_cat),
+                            "fornecedor": st.column_config.SelectboxColumn("Fornecedor", options=lista_forn_cat),
+                            "observacao": st.column_config.TextColumn("Observação"),
+                            "status": st.column_config.SelectboxColumn("Status", options=["Pago", "A Pagar"]),
+                            "valor": st.column_config.NumberColumn("Valor (R$)", format="R$ %.2f", min_value=0.0),
+                            "ano_comp": st.column_config.SelectboxColumn("Ano Comp.", options=lista_anos_comp_cat),
+                            "mes_comp_nome": st.column_config.SelectboxColumn("Mês Comp.", options=lista_meses_comp_cat),
+                            "data_registro": None, 
+                            "tipo": None,
+                            "competencia": None, 
+                            "mes_comp_num": None 
+                        }
+                    )
+                    
+                    mudancas_cat = {}
+                    excluir_cat = []
+
+                    for idx in df_detalhe_edit.index:
+                        linha_orig = df_detalhe_edit.loc[idx]
+                        linha_edit = editor_cat.loc[idx]
+
+                        if linha_edit["🗑️ Excluir"]:
+                            excluir_cat.append(idx)
+                            continue
+
+                        alteracoes = {}
+                        if str(linha_orig['data_liquidacao']) != str(linha_edit['data_liquidacao']):
+                            alteracoes['data_liquidacao'] = pd.to_datetime(linha_edit['data_liquidacao']).strftime("%Y-%m-%d")
+                        if str(linha_orig['fornecedor']) != str(linha_edit['fornecedor']):
+                            alteracoes['fornecedor'] = linha_edit['fornecedor']
+                        if str(linha_orig['categoria']) != str(linha_edit['categoria']):
+                            alteracoes['categoria'] = linha_edit['categoria']
+                        if str(linha_orig['status']) != str(linha_edit['status']):
+                            alteracoes['status'] = linha_edit['status']
+                        if float(linha_orig['valor']) != float(linha_edit['valor']):
+                            alteracoes['valor'] = float(linha_edit['valor'])
+                        if str(linha_orig['mes_comp_nome']) != str(linha_edit['mes_comp_nome']) or str(linha_orig['ano_comp']) != str(linha_edit['ano_comp']):
+                            mes_num = MESES_PT_INV[linha_edit['mes_comp_nome']]
+                            alteracoes['competencia'] = f"{linha_edit['ano_comp']}-{mes_num:02d}"
+                        
+                        obs_orig = "" if pd.isna(linha_orig['observacao']) else str(linha_orig['observacao'])
+                        obs_edit = "" if pd.isna(linha_edit['observacao']) else str(linha_edit['observacao'])
+                        if obs_orig != obs_edit:
+                            alteracoes['observacao'] = obs_edit
+
+                        if alteracoes:
+                            mudancas_cat[idx] = alteracoes
+
+                    if mudancas_cat or excluir_cat:
+                        c_btn1, c_btn2 = st.columns(2)
+                        with c_btn1:
+                            if mudancas_cat:
+                                if st.button(f"💾 Salvar {len(mudancas_cat)} Alteração(ões) na Categoria", key="btn_salvar_cat", type="primary", use_container_width=True):
+                                    editar_multiplos_lancamentos(mudancas_cat)
+                                    st.success("Atualizado com sucesso!")
+                                    time.sleep(1.5)
+                                    st.cache_data.clear()
+                                    st.rerun()
+                        with c_btn2:
+                            if excluir_cat:
+                                if st.button(f"🗑️ Excluir {len(excluir_cat)} Lançamento(s)", key="btn_excluir_cat", type="secondary", use_container_width=True):
+                                    excluir_lancamentos(excluir_cat)
+                                    st.success("Excluído com sucesso!")
+                                    time.sleep(1.5)
+                                    st.cache_data.clear()
+                                    st.rerun()
 
                     # --- GERAÇÃO DO ARQUIVO EXCEL ---
+                    df_export = df_cat_view[['data_liquidacao', 'categoria', 'fornecedor', 'observacao', 'status', 'valor']].copy()
+                    df_export.columns = ['Data Liq.', 'Categoria', 'Fornecedor', 'Observação', 'Status', 'Valor (R$)']
+                    df_export['Data Liq.'] = pd.to_datetime(df_export['Data Liq.']).dt.strftime('%d/%m/%Y')
+                    df_export = df_export.sort_values(['Categoria', 'Data Liq.'])
+
                     output = io.BytesIO()
                     with pd.ExcelWriter(output, engine='openpyxl') as writer:
                         df_resumo.to_excel(writer, index=False, sheet_name='Resumo de Categorias')
-                        df_detalhe.to_excel(writer, index=False, sheet_name='Lançamentos Detalhados')
+                        df_export.to_excel(writer, index=False, sheet_name='Lançamentos Detalhados')
                     excel_data = output.getvalue()
 
                     st.markdown("---")
@@ -1180,7 +1251,7 @@ if check_password():
                         type="primary"
                     )
                 else:
-                    st.info("Nenhuma despesa encontrada para o período selecionado.")
+                    st.info("Nenhuma despesa encontrada para os filtros selecionados.")
 
         else:
             st.info("Nenhum dado lançado ainda.")
