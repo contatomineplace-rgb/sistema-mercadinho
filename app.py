@@ -5,6 +5,7 @@ import hashlib
 import calendar
 from datetime import datetime, date
 import re
+import io
 from streamlit_gsheets import GSheetsConnection
 
 # --- CONFIGURAÇÕES INICIAIS ---
@@ -737,11 +738,12 @@ if check_password():
             df['mes_comp_num'] = df['competencia'].str[5:].astype(int)
             df['mes_comp_nome'] = df['mes_comp_num'].map(MESES_PT)
 
-            # Abas para separar o Dashboard, Calendário e DRE
-            tab_dash, tab_calendario, tab_contabil = st.tabs([
+            # Abas para separar os relatórios, incluindo o novo detalhamento por categoria
+            tab_dash, tab_calendario, tab_contabil, tab_cat_detalhe = st.tabs([
                 "📊 Dashboard e Extrato", 
                 "📅 Calendário de Vencimentos (A Pagar)", 
-                "📋 Visão Contábil (DRE p/ Contador)"
+                "📋 Visão Contábil (DRE p/ Contador)",
+                "📑 Despesas por Categoria"
             ])
 
             with tab_dash:
@@ -1109,15 +1111,71 @@ if check_password():
                     # Adicionar coluna de Total
                     dre_pivot['TOTAL ANUAL'] = dre_pivot.sum(axis=1)
                     
-                    # Exibir tabela interativa (o contador pode clicar no ícone de download no canto da tabela)
+                    # Exibir tabela interativa
                     st.dataframe(
                         dre_pivot.style.format("R$ {:,.2f}"),
                         use_container_width=True
                     )
                     
-                    st.info("💡 **Dica para o Contador:** Passe o mouse sobre a tabela acima e clique no ícone de download (flecha apontando para baixo) no canto superior direito para exportar esta DRE como um arquivo CSV e abrir no Excel.")
+                    st.info("💡 **Dica para o Contador:** Passe o mouse sobre a tabela acima e clique no ícone de download (flecha apontando para baixo) no canto superior direito para exportar esta DRE como um arquivo CSV.")
                 else:
                     st.warning(f"Não há lançamentos registrados no ano de {ano_dre}.")
+
+            with tab_cat_detalhe:
+                st.subheader("📑 Detalhamento de Despesas por Categoria")
+                st.markdown("Visualize suas despesas agrupadas por classificação e baixe um relatório formatado em Excel.")
+
+                # Filtros específicos da aba para facilitar a exportação
+                c_f1, c_f2 = st.columns(2)
+                anos_cat = sorted(df[df['tipo'] == 'Despesa']['ano_comp'].dropna().unique(), reverse=True)
+                if not anos_cat: anos_cat = [str(datetime.today().year)]
+                ano_cat_sel = c_f1.selectbox("Filtrar por Ano", ["Todos"] + list(anos_cat), key="ano_cat_sel")
+
+                meses_cat = list(MESES_PT.values())
+                mes_cat_sel = c_f2.selectbox("Filtrar por Mês", ["Todos"] + meses_cat, key="mes_cat_sel")
+
+                # Filtrando os dados
+                df_cat_view = df[df['tipo'] == 'Despesa'].copy()
+                if ano_cat_sel != "Todos":
+                    df_cat_view = df_cat_view[df_cat_view['ano_comp'] == ano_cat_sel]
+                if mes_cat_sel != "Todos":
+                    df_cat_view = df_cat_view[df_cat_view['mes_comp_nome'] == mes_cat_sel]
+
+                if not df_cat_view.empty:
+                    # Tabela 1: Resumo agrupado
+                    df_resumo = df_cat_view.groupby('categoria')['valor'].sum().reset_index()
+                    df_resumo.columns = ['Categoria', 'Total (R$)']
+                    df_resumo = df_resumo.sort_values('Total (R$)', ascending=False)
+
+                    # Tabela 2: Lançamentos detalhados
+                    df_detalhe = df_cat_view[['data_liquidacao', 'categoria', 'fornecedor', 'observacao', 'status', 'valor']].copy()
+                    df_detalhe.columns = ['Data', 'Categoria', 'Fornecedor', 'Observação', 'Status', 'Valor (R$)']
+                    df_detalhe['Data'] = pd.to_datetime(df_detalhe['Data']).dt.strftime('%d/%m/%Y')
+                    df_detalhe = df_detalhe.sort_values(['Categoria', 'Data'])
+
+                    st.markdown("### Resumo por Categoria")
+                    st.dataframe(df_resumo.style.format({'Total (R$)': 'R$ {:,.2f}'}), use_container_width=True, hide_index=True)
+
+                    st.markdown("### Lançamentos Detalhados")
+                    st.dataframe(df_detalhe.style.format({'Valor (R$)': 'R$ {:,.2f}'}), use_container_width=True, hide_index=True)
+
+                    # --- GERAÇÃO DO ARQUIVO EXCEL ---
+                    output = io.BytesIO()
+                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                        df_resumo.to_excel(writer, index=False, sheet_name='Resumo de Categorias')
+                        df_detalhe.to_excel(writer, index=False, sheet_name='Lançamentos Detalhados')
+                    excel_data = output.getvalue()
+
+                    st.markdown("---")
+                    st.download_button(
+                        label="📥 Baixar Relatório Completo em Excel (.xlsx)",
+                        data=excel_data,
+                        file_name=f"Despesas_por_Categoria_{ano_cat_sel}_{mes_cat_sel}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        type="primary"
+                    )
+                else:
+                    st.info("Nenhuma despesa encontrada para o período selecionado.")
 
         else:
             st.info("Nenhum dado lançado ainda.")
