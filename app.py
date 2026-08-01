@@ -1348,6 +1348,8 @@ if check_password():
                     df_extrato = pd.DataFrame(dados_extrato)
 
                     if not df_extrato.empty:
+                        df_ext_saidas = df_extrato[df_extrato['Valor'] < 0].copy()
+                        df_ext_saidas['Valor_Absoluto'] = df_ext_saidas['Valor'].abs() 
                         df_ext_saidas['CHAVE_DATA'] = df_ext_saidas['Data'].astype(str).str.strip()
                         df_ext_saidas['CHAVE_VALOR'] = df_ext_saidas['Valor_Absoluto'].apply(lambda x: "{:.2f}".format(x))
                         # Criar um número de sequência para desempatar transações de mesmo valor no mesmo dia
