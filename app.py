@@ -825,21 +825,47 @@ if check_password():
                     fornecedores_disp = []
                 filtro_fornecedor = st.sidebar.multiselect("Fornecedor", options=fornecedores_disp, default=fornecedores_disp)
                 
-                anos_disp = sorted(df['ano_comp'].unique())
-                filtro_ano = st.sidebar.multiselect("Ano de Competência", options=anos_disp, default=anos_disp)
-                meses_disp_nome = [MESES_PT[m] for m in sorted(df['mes_comp_num'].unique())]
-                filtro_mes = st.sidebar.multiselect("Mês de Competência", options=meses_disp_nome, default=meses_disp_nome)
-                min_date = df['data_liquidacao'].min().date()
-                max_date = df['data_liquidacao'].max().date()
-                periodo = st.sidebar.date_input("Período (Data Liquidação)", value=(min_date, max_date), min_value=min_date, max_value=max_date)
+                def formatar_comp(c):
+                    try:
+                        ano, mes = c.split('-')
+                        return f"{MESES_PT[int(mes)]}/{ano}"
+                    except:
+                        return c
+                
+                comps_ordenadas = sorted(df['competencia'].dropna().unique())
+                if not comps_ordenadas: 
+                    comps_ordenadas = [f"{datetime.now().year}-{datetime.now().month:02d}"]
+
+                st.sidebar.markdown("---")
+                st.sidebar.markdown("📅 **Período de Competência**")
+                col_c1, col_c2 = st.sidebar.columns(2)
+                comp_inicial = col_c1.selectbox("De:", options=comps_ordenadas, index=0, format_func=formatar_comp)
+                comp_final = col_c2.selectbox("Até:", options=comps_ordenadas, index=len(comps_ordenadas)-1, format_func=formatar_comp)
+                
+                # Prevenção: se a inicial for maior que a final, trava na inicial
+                if comp_inicial > comp_final:
+                    comp_final = comp_inicial
+
+                st.sidebar.markdown("---")
+                try:
+                    min_date = df['data_liquidacao'].dropna().min().date()
+                    max_date = df['data_liquidacao'].dropna().max().date()
+                except:
+                    min_date = datetime.today().date()
+                    max_date = datetime.today().date()
+
+                periodo = st.sidebar.date_input("Filtro por Data de Liquidação (Opcional)", value=[], help="Selecione um período se quiser cruzar a competência com a data exata do pagamento.")
 
                 df_filtered = df.copy()
                 if filtro_tipo: df_filtered = df_filtered[df_filtered['tipo'].isin(filtro_tipo)]
                 if filtro_categoria: df_filtered = df_filtered[df_filtered['categoria'].isin(filtro_categoria)]
                 if filtro_status: df_filtered = df_filtered[df_filtered['status'].isin(filtro_status)]
                 if filtro_fornecedor: df_filtered = df_filtered[df_filtered['fornecedor'].isin(filtro_fornecedor)]
-                if filtro_ano: df_filtered = df_filtered[df_filtered['ano_comp'].isin(filtro_ano)]
-                if filtro_mes: df_filtered = df_filtered[df_filtered['mes_comp_nome'].isin(filtro_mes)]
+                
+                # --- NOVO FILTRO DE COMPETÊNCIA ---
+                df_filtered = df_filtered[(df_filtered['competencia'] >= comp_inicial) & (df_filtered['competencia'] <= comp_final)]
+                
+                # Filtro opcional de Liquidação
                 if isinstance(periodo, tuple) and len(periodo) == 2:
                     df_filtered = df_filtered[(df_filtered['data_liquidacao'].dt.date >= periodo[0]) & (df_filtered['data_liquidacao'].dt.date <= periodo[1])]
 
