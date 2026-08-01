@@ -807,7 +807,33 @@ if check_password():
             ])
 
             with tab_dash:
-                st.sidebar.markdown("### Filtros do Relatório")
+                # 1. Filtros Principais na Tela (Acima dos gráficos)
+                st.markdown("### 📅 Filtro de Competência")
+                
+                def formatar_comp(c):
+                    try:
+                        ano, mes = c.split('-')
+                        return f"{MESES_PT[int(mes)]}/{ano}"
+                    except:
+                        return c
+                
+                comps_ordenadas = sorted(df['competencia'].dropna().unique())
+                if not comps_ordenadas: 
+                    comps_ordenadas = [f"{datetime.now().year}-{datetime.now().month:02d}"]
+
+                col_comp1, col_comp2, col_comp3 = st.columns([1, 1, 2])
+                with col_comp1:
+                    comp_inicial = st.selectbox("De (Mês/Ano):", options=comps_ordenadas, index=0, format_func=formatar_comp)
+                with col_comp2:
+                    comp_final = st.selectbox("Até (Mês/Ano):", options=comps_ordenadas, index=len(comps_ordenadas)-1, format_func=formatar_comp)
+                
+                if comp_inicial > comp_final:
+                    comp_final = comp_inicial
+                    
+                st.markdown("---")
+
+                # 2. Filtros Adicionais na Barra Lateral (Sidebar)
+                st.sidebar.markdown("### Outros Filtros do Relatório")
                 filtro_tipo = st.sidebar.multiselect("Tipo", options=["Receita", "Despesa"], default=["Receita", "Despesa"])
                 
                 categorias_disp = sorted(df['categoria'].dropna().unique())
@@ -825,27 +851,6 @@ if check_password():
                     fornecedores_disp = []
                 filtro_fornecedor = st.sidebar.multiselect("Fornecedor", options=fornecedores_disp, default=fornecedores_disp)
                 
-                def formatar_comp(c):
-                    try:
-                        ano, mes = c.split('-')
-                        return f"{MESES_PT[int(mes)]}/{ano}"
-                    except:
-                        return c
-                
-                comps_ordenadas = sorted(df['competencia'].dropna().unique())
-                if not comps_ordenadas: 
-                    comps_ordenadas = [f"{datetime.now().year}-{datetime.now().month:02d}"]
-
-                st.sidebar.markdown("---")
-                st.sidebar.markdown("📅 **Período de Competência**")
-                col_c1, col_c2 = st.sidebar.columns(2)
-                comp_inicial = col_c1.selectbox("De:", options=comps_ordenadas, index=0, format_func=formatar_comp)
-                comp_final = col_c2.selectbox("Até:", options=comps_ordenadas, index=len(comps_ordenadas)-1, format_func=formatar_comp)
-                
-                # Prevenção: se a inicial for maior que a final, trava na inicial
-                if comp_inicial > comp_final:
-                    comp_final = comp_inicial
-
                 st.sidebar.markdown("---")
                 try:
                     min_date = df['data_liquidacao'].dropna().min().date()
@@ -856,16 +861,17 @@ if check_password():
 
                 periodo = st.sidebar.date_input("Filtro por Data de Liquidação (Opcional)", value=[], help="Selecione um período se quiser cruzar a competência com a data exata do pagamento.")
 
+                # 3. Aplicação de Todos os Filtros
                 df_filtered = df.copy()
+                
+                # Aplica o Filtro de Competência da Tela Principal
+                df_filtered = df_filtered[(df_filtered['competencia'] >= comp_inicial) & (df_filtered['competencia'] <= comp_final)]
+                
+                # Aplica os Filtros da Barra Lateral
                 if filtro_tipo: df_filtered = df_filtered[df_filtered['tipo'].isin(filtro_tipo)]
                 if filtro_categoria: df_filtered = df_filtered[df_filtered['categoria'].isin(filtro_categoria)]
                 if filtro_status: df_filtered = df_filtered[df_filtered['status'].isin(filtro_status)]
                 if filtro_fornecedor: df_filtered = df_filtered[df_filtered['fornecedor'].isin(filtro_fornecedor)]
-                
-                # --- NOVO FILTRO DE COMPETÊNCIA ---
-                df_filtered = df_filtered[(df_filtered['competencia'] >= comp_inicial) & (df_filtered['competencia'] <= comp_final)]
-                
-                # Filtro opcional de Liquidação
                 if isinstance(periodo, tuple) and len(periodo) == 2:
                     df_filtered = df_filtered[(df_filtered['data_liquidacao'].dt.date >= periodo[0]) & (df_filtered['data_liquidacao'].dt.date <= periodo[1])]
 
