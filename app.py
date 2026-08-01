@@ -1348,10 +1348,10 @@ if check_password():
                     df_extrato = pd.DataFrame(dados_extrato)
 
                     if not df_extrato.empty:
-                        df_ext_saidas = df_extrato[df_extrato['Valor'] < 0].copy()
-                        df_ext_saidas['Valor_Absoluto'] = df_ext_saidas['Valor'].abs() 
                         df_ext_saidas['CHAVE_DATA'] = df_ext_saidas['Data'].astype(str).str.strip()
                         df_ext_saidas['CHAVE_VALOR'] = df_ext_saidas['Valor_Absoluto'].apply(lambda x: "{:.2f}".format(x))
+                        # Criar um número de sequência para desempatar transações de mesmo valor no mesmo dia
+                        df_ext_saidas['SEQ'] = df_ext_saidas.groupby(['CHAVE_DATA', 'CHAVE_VALOR']).cumcount()
 
                         df_sistema = carregar_dados()
                         df_sistema = df_sistema[df_sistema['tipo'] == 'Despesa'].copy()
@@ -1359,10 +1359,15 @@ if check_password():
                         
                         df_sistema['CHAVE_DATA'] = pd.to_datetime(df_sistema['data_liquidacao']).dt.date.astype(str).str.strip()
                         df_sistema['CHAVE_VALOR'] = df_sistema['valor'].apply(lambda x: "{:.2f}".format(x))
+                        # Criar o mesmo número de sequência no sistema
+                        df_sistema['SEQ'] = df_sistema.groupby(['CHAVE_DATA', 'CHAVE_VALOR']).cumcount()
 
-                        df_conciliados = pd.merge(df_ext_saidas, df_sistema, on=['CHAVE_DATA', 'CHAVE_VALOR'], how='inner')
-                        chaves_conciliadas = df_conciliados['CHAVE_DATA'] + df_conciliados['CHAVE_VALOR']
-                        df_ext_saidas['CHAVE_UNICA'] = df_ext_saidas['CHAVE_DATA'] + df_ext_saidas['CHAVE_VALOR']
+                        # O merge agora exige Data, Valor e Sequência iguais (1 para 1)
+                        df_conciliados = pd.merge(df_ext_saidas, df_sistema, on=['CHAVE_DATA', 'CHAVE_VALOR', 'SEQ'], how='inner')
+                        
+                        # Atualiza as chaves únicas para incluir a sequência
+                        chaves_conciliadas = df_conciliados['CHAVE_DATA'] + df_conciliados['CHAVE_VALOR'] + df_conciliados['SEQ'].astype(str)
+                        df_ext_saidas['CHAVE_UNICA'] = df_ext_saidas['CHAVE_DATA'] + df_ext_saidas['CHAVE_VALOR'] + df_ext_saidas['SEQ'].astype(str)
                         df_nao_encontrados = df_ext_saidas[~df_ext_saidas['CHAVE_UNICA'].isin(chaves_conciliadas)]
 
                         st.markdown("---")
