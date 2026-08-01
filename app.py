@@ -36,12 +36,49 @@ def carregar_dados():
     try:
         df = conn.read(worksheet="lancamentos", ttl=600)
         if not df.empty:
-            # Faxina Global: Remove espaços invisíveis que causam falhas nos filtros
+            # 1. Faxina Global de Textos (Remove espaços invisíveis e padroniza as caixas)
             colunas_str = ['tipo', 'competencia', 'categoria', 'status', 'fornecedor']
             for col in colunas_str:
                 if col in df.columns:
                     df[col] = df[col].fillna("").astype(str).str.strip()
-                    df.loc[df[col] == 'nan', col] = ""
+                    df.loc[df[col].isin(['nan', 'None']), col] = ""
+            
+            if 'tipo' in df.columns:
+                df['tipo'] = df['tipo'].str.title() # Garante que fique "Receita" e "Despesa"
+
+            # 2. Padronização Robusta da Competência (Garante YYYY-MM)
+            def padronizar_competencia(c):
+                c = str(c).strip()
+                if '-' in c:
+                    partes = c.split('-')
+                    if len(partes) == 2 and len(partes[1]) == 1:
+                        return f"{partes[0]}-0{partes[1]}"
+                return c
+            
+            if 'competencia' in df.columns:
+                df['competencia'] = df['competencia'].apply(padronizar_competencia)
+
+            # 3. Conversão Numérica à Prova de Falhas
+            def limpar_valor(v):
+                if pd.isna(v): return 0.0
+                if isinstance(v, (int, float)): return float(v)
+                v = str(v).replace('R$', '').replace('R$ ', '').strip()
+                if ',' in v and '.' in v:
+                    v = v.replace('.', '').replace(',', '.')
+                elif ',' in v:
+                    v = v.replace(',', '.')
+                try:
+                    return float(v)
+                except:
+                    return 0.0
+                    
+            if 'valor' in df.columns:
+                df['valor'] = df['valor'].apply(limpar_valor)
+                
+            # 4. Formatação Definitiva de Datas
+            if 'data_liquidacao' in df.columns:
+                df['data_liquidacao'] = pd.to_datetime(df['data_liquidacao'], errors='coerce')
+                
         return df
     except Exception as e:
         st.error(f"Erro de conexão com o banco de dados (Lançamentos): {e}")
@@ -66,7 +103,6 @@ def carregar_lista_nomes_fornecedores():
     return df['nome'].dropna().unique().tolist()
 
 def obter_dict_forn_cat():
-    """Retorna um dicionário vinculando fornecedor à sua categoria padrão"""
     df_f = carregar_fornecedores_df()
     d = {}
     if not df_f.empty and 'categoria_padrao' in df_f.columns:
@@ -204,7 +240,6 @@ def atualizar_data_liq():
         st.session_state["data_liq_desp"] = st.session_state["memoria_data_liq"]
 
 def auto_preencher_cat_individual():
-    """Preenche a categoria automaticamente no Lançamento Individual se houver vínculo."""
     d = obter_dict_forn_cat()
     f = st.session_state.get("sel_forn")
     if f and f in d:
@@ -214,7 +249,7 @@ def auto_preencher_cat_individual():
             st.session_state["cat_desp"] = c
 
 def formatar_comp(c):
-    """Função global para formatar o texto da competência nos menus suspensos."""
+    """Formata o texto da competência (ex: 2026-03 para Março/2026)"""
     try:
         ano, mes = str(c).split('-')
         return f"{MESES_PT[int(mes)]}/{ano}"
@@ -607,12 +642,10 @@ if check_password():
 
         # === 4. EDITAR OU EXCLUIR DESPESA ===
         with tab_editar_excluir:
-            st.subheader("🔍 Localizar, Editar ou Excluir")
+            st.subheader("🔍 Localizar, Editar ou Excluir (Painel Antigo)")
+            st.info("Recomendamos utilizar o 'Extrato Detalhado Interativo' na aba de Relatórios para editar dados de forma muito mais rápida.")
             df_dados = carregar_dados()
             if not df_dados.empty:
-                df_dados['valor'] = pd.to_numeric(df_dados['valor'])
-                df_dados['data_liquidacao'] = pd.to_datetime(df_dados['data_liquidacao'], errors='coerce')
-                
                 col_f1, col_f2, col_f3 = st.columns(3)
                 with col_f1:
                     anos_disponiveis = sorted(df_dados['competencia'].str[:4].unique())
@@ -799,8 +832,6 @@ if check_password():
             df_rec = carregar_dados()
             
             if not df_rec.empty:
-                df_rec['valor'] = pd.to_numeric(df_rec['valor'])
-                df_rec['data_liquidacao'] = pd.to_datetime(df_rec['data_liquidacao'], errors='coerce')
                 df_rec = df_rec[df_rec['tipo'] == 'Receita'].copy()
                 
             if not df_rec.empty:
@@ -848,7 +879,7 @@ if check_password():
                             "🗑️ Excluir": st.column_config.CheckboxColumn("Excluir?", required=True),
                             "data_liquidacao": st.column_config.DateColumn("Data Recebimento", format="DD/MM/YYYY"),
                             "valor": st.column_config.NumberColumn("Valor (R$)", format="R$ %.2f", min_value=0.0),
-                            "fornecedor": st.column_config.SelectboxColumn("Fornecedor/Cliente", options=lista_forn_rec),
+                            "fornecedor": st.column_config.SelectboxColumn("Origem/Cliente", options=lista_forn_rec),
                             "categoria": st.column_config.SelectboxColumn("Categoria", options=lista_cats_rec),
                             "status": st.column_config.SelectboxColumn("Status", options=["Recebido", "A Receber"]),
                             "ano_comp": st.column_config.SelectboxColumn("Ano Comp.", options=lista_anos_comp_rec),
@@ -856,7 +887,7 @@ if check_password():
                             "observacao": st.column_config.TextColumn("Observação"),
                             "data_registro": None, 
                             "tipo": None,
-                            "competencia": None,
+                            "competencia": None, 
                             "mes_comp_num": None
                         }
                     )
@@ -929,13 +960,10 @@ if check_password():
         df = carregar_dados()
         
         if not df.empty:
-            df['valor'] = pd.to_numeric(df['valor'])
-            df['data_liquidacao'] = pd.to_datetime(df['data_liquidacao'], errors='coerce')
             df['ano_comp'] = df['competencia'].str[:4]
             df['mes_comp_num'] = df['competencia'].str[5:7].astype(int)
             df['mes_comp_nome'] = df['mes_comp_num'].map(MESES_PT)
 
-            # Abas para separar os relatórios
             tab_dash, tab_calendario, tab_contabil, tab_cat_detalhe = st.tabs([
                 "📊 Dashboard e Extrato", 
                 "📅 Calendário de Vencimentos (A Pagar)", 
@@ -944,7 +972,6 @@ if check_password():
             ])
 
             with tab_dash:
-                # 1. Filtros Principais na Tela (Acima dos gráficos)
                 st.markdown("### 📅 Filtro de Competência")
                 
                 comps_ordenadas = sorted(df['competencia'].dropna().unique())
@@ -962,48 +989,38 @@ if check_password():
                     
                 st.markdown("---")
 
-                # 2. Filtros Adicionais na Barra Lateral (Sidebar)
-                # IMPORTANTE: Configurados para iniciar vazios para evitar ocultação acidental de novos dados
                 st.sidebar.markdown("### Outros Filtros do Relatório")
-                filtro_tipo = st.sidebar.multiselect("Tipo", options=["Receita", "Despesa"], placeholder="Todos")
+                # Sem valores padrão, para que inicie mostrando TUDO
+                filtro_tipo = st.sidebar.multiselect("Tipo", options=["Receita", "Despesa"])
                 
                 categorias_disp = sorted(df['categoria'].dropna().unique())
-                filtro_categoria = st.sidebar.multiselect("Categoria", options=categorias_disp, placeholder="Todas")
+                filtro_categoria = st.sidebar.multiselect("Categoria", options=categorias_disp)
                 
                 if 'status' in df.columns:
                     status_disp = sorted(df['status'].dropna().unique())
                 else:
                     status_disp = []
-                filtro_status = st.sidebar.multiselect("Status", options=status_disp, placeholder="Todos")
+                filtro_status = st.sidebar.multiselect("Status", options=status_disp)
                 
                 if 'fornecedor' in df.columns:
                     fornecedores_disp = sorted(df['fornecedor'].dropna().astype(str).unique())
                 else:
                     fornecedores_disp = []
-                filtro_fornecedor = st.sidebar.multiselect("Fornecedor", options=fornecedores_disp, placeholder="Todos")
+                filtro_fornecedor = st.sidebar.multiselect("Fornecedor", options=fornecedores_disp)
                 
                 st.sidebar.markdown("---")
-                try:
-                    min_date = df['data_liquidacao'].dropna().min().date()
-                    max_date = df['data_liquidacao'].dropna().max().date()
-                except:
-                    min_date = datetime.today().date()
-                    max_date = datetime.today().date()
+                periodo = st.sidebar.date_input("Filtro por Data de Liquidação (Opcional)", value=[], help="Cruzar a competência com a data do pagamento.")
 
-                periodo = st.sidebar.date_input("Filtro por Data de Liquidação (Opcional)", value=[], help="Selecione um período se quiser cruzar a competência com a data exata do pagamento.")
-
-                # 3. Aplicação de Todos os Filtros
                 df_filtered = df.copy()
                 
-                # Aplica o Filtro de Competência da Tela Principal
+                # 1. Filtro Principal
                 df_filtered = df_filtered[(df_filtered['competencia'] >= comp_inicial) & (df_filtered['competencia'] <= comp_final)]
                 
-                # Aplica os Filtros da Barra Lateral APENAS SE houver algo selecionado
+                # 2. Filtros Laterais
                 if filtro_tipo: df_filtered = df_filtered[df_filtered['tipo'].isin(filtro_tipo)]
                 if filtro_categoria: df_filtered = df_filtered[df_filtered['categoria'].isin(filtro_categoria)]
                 if filtro_status: df_filtered = df_filtered[df_filtered['status'].isin(filtro_status)]
                 if filtro_fornecedor: df_filtered = df_filtered[df_filtered['fornecedor'].isin(filtro_fornecedor)]
-                
                 if isinstance(periodo, tuple) and len(periodo) == 2:
                     df_filtered = df_filtered[(df_filtered['data_liquidacao'].dt.date >= periodo[0]) & (df_filtered['data_liquidacao'].dt.date <= periodo[1])]
 
@@ -1030,9 +1047,6 @@ if check_password():
                 else:
                     st.info("Sem dados para exibir nos gráficos com os filtros atuais.")
 
-                # ==========================================
-                # EXTRATO EDITÁVEL EM MASSA
-                # ==========================================
                 st.subheader("Extrato Detalhado Interativo")
                 st.markdown("💡 **Dica:** Altere qualquer dado diretamente na tabela abaixo e clique no botão de Salvar que aparecerá. Para excluir lançamentos, marque a caixinha na primeira coluna.")
                 
@@ -1521,7 +1535,6 @@ if check_password():
 
                         df_sistema = carregar_dados()
                         df_sistema = df_sistema[df_sistema['tipo'] == 'Despesa'].copy()
-                        df_sistema['valor'] = pd.to_numeric(df_sistema['valor'])
                         
                         df_sistema['CHAVE_DATA'] = pd.to_datetime(df_sistema['data_liquidacao']).dt.date.astype(str).str.strip()
                         df_sistema['CHAVE_VALOR'] = df_sistema['valor'].apply(lambda x: "{:.2f}".format(x))
