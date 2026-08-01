@@ -544,7 +544,6 @@ if check_password():
                                         nomes_forn_existentes.add(nome_forn.lower())
 
                                     cat_str = str(row.get('categoria', '')).strip()
-                                    # Se a categoria estiver em branco, usa a vinculação padrão ou joga pra "Outros"
                                     if not cat_str or cat_str.lower() == 'nan':
                                         cat_str = d_forn_cat_import.get(nome_forn, 'Outros')
 
@@ -735,52 +734,176 @@ if check_password():
 
     # --- ABA: LANÇAR RECEITA ---
     elif menu == "Lançar Receita":
-        st.header("📈 Nova Receita")
-        if "limpar_receita_agora" in st.session_state:
-            st.session_state["val_rec"] = ""
-            st.session_state["obs_rec"] = ""
-            st.session_state["data_rec"] = None
-            if "mes_rec" in st.session_state: del st.session_state["mes_rec"]
-            if "ano_rec" in st.session_state: del st.session_state["ano_rec"]
-            del st.session_state["limpar_receita_agora"]
+        st.header("📈 Gestão de Receitas")
+        
+        tab_rec_nova, tab_rec_edit = st.tabs(["📝 Lançar Nova Receita", "✏️ Editar Receitas Lançadas"])
+        
+        with tab_rec_nova:
+            if "limpar_receita_agora" in st.session_state:
+                st.session_state["val_rec"] = ""
+                st.session_state["obs_rec"] = ""
+                st.session_state["data_rec"] = None
+                if "mes_rec" in st.session_state: del st.session_state["mes_rec"]
+                if "ano_rec" in st.session_state: del st.session_state["ano_rec"]
+                del st.session_state["limpar_receita_agora"]
 
-        mes_atual_nome = MESES_PT[datetime.now().month]
-        idx_mes = list(MESES_PT.values()).index(mes_atual_nome)
-        lista_anos = gerar_lista_anos()
+            mes_atual_nome = MESES_PT[datetime.now().month]
+            idx_mes = list(MESES_PT.values()).index(mes_atual_nome)
+            lista_anos = gerar_lista_anos()
 
-        with st.container():
-            valor_str = st.text_input("Valor Receita (R$)", value="", key="val_rec", help="Ex: 15.000,00", on_change=formatar_input_br, args=("val_rec",))
-            data_liq = st.date_input("Data Recebimento", value=None, format="DD/MM/YYYY", key="data_rec")
-            c_mes, c_ano = st.columns(2)
-            with c_mes: mes_rec = st.selectbox("Mês Competência", list(MESES_PT.values()), index=idx_mes, key="mes_rec")
-            with c_ano: ano_rec = st.selectbox("Ano Competência", lista_anos, key="ano_rec")
-            obs = st.text_area("Observação", key="obs_rec")
+            with st.container():
+                valor_str = st.text_input("Valor Receita (R$)", value="", key="val_rec", help="Ex: 15.000,00", on_change=formatar_input_br, args=("val_rec",))
+                data_liq = st.date_input("Data Recebimento", value=None, format="DD/MM/YYYY", key="data_rec")
+                c_mes, c_ano = st.columns(2)
+                with c_mes: mes_rec = st.selectbox("Mês Competência", list(MESES_PT.values()), index=idx_mes, key="mes_rec")
+                with c_ano: ano_rec = st.selectbox("Ano Competência", lista_anos, key="ano_rec")
+                obs = st.text_area("Observação", key="obs_rec")
+                
+                st.markdown("---")
+                if st.button("💾 Salvar Receita", type="primary"):
+                    if not valor_str or not data_liq:
+                        st.warning("Preencha o Valor e a Data.")
+                    else:
+                        valor_float = converter_moeda_br_para_float(valor_str)
+                        mes_num = MESES_PT_INV[mes_rec]
+                        comp_formatada = f"{ano_rec}-{mes_num:02d}"
+                        dados = {
+                            "data_registro": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "tipo": "Receita",
+                            "valor": valor_float,
+                            "fornecedor": "Cliente Final",
+                            "data_liquidacao": data_liq.strftime("%Y-%m-%d"),
+                            "competencia": comp_formatada,
+                            "status": "Recebido",
+                            "categoria": "Vendas",
+                            "observacao": obs
+                        }
+                        salvar_lancamento(dados)
+                        st.success("Receita registrada! Limpando em 3 segundos...")
+                        time.sleep(3)
+                        st.session_state["limpar_receita_agora"] = True
+                        st.cache_data.clear()
+                        st.rerun()
+
+        with tab_rec_edit:
+            st.subheader("🔍 Localizar, Editar ou Excluir Receitas")
+            df_rec = carregar_dados()
             
-            st.markdown("---")
-            if st.button("💾 Salvar Receita", type="primary"):
-                if not valor_str or not data_liq:
-                    st.warning("Preencha o Valor e a Data.")
+            if not df_rec.empty:
+                df_rec['valor'] = pd.to_numeric(df_rec['valor'])
+                df_rec['data_liquidacao'] = pd.to_datetime(df_rec['data_liquidacao'], errors='coerce')
+                df_rec = df_rec[df_rec['tipo'] == 'Receita'].copy()
+                
+            if not df_rec.empty:
+                df_rec['ano_comp'] = df_rec['competencia'].str[:4]
+                df_rec['mes_comp_num'] = df_rec['competencia'].str[5:7].astype(int)
+                df_rec['mes_comp_nome'] = df_rec['mes_comp_num'].map(MESES_PT)
+
+                col_fr1, col_fr2 = st.columns(2)
+                anos_disponiveis = sorted(df_rec['ano_comp'].dropna().unique(), reverse=True)
+                if not anos_disponiveis: anos_disponiveis = [str(datetime.today().year)]
+                filtro_ano_rec = col_fr1.selectbox("Filtrar por Ano", ["Todos"] + list(anos_disponiveis))
+                
+                meses_disponiveis = list(MESES_PT.values())
+                filtro_mes_rec = col_fr2.selectbox("Filtrar por Mês", ["Todos"] + meses_disponiveis)
+
+                df_rec_filtrado = df_rec.copy()
+                if filtro_ano_rec != "Todos":
+                    df_rec_filtrado = df_rec_filtrado[df_rec_filtrado['ano_comp'] == filtro_ano_rec]
+                if filtro_mes_rec != "Todos":
+                    df_rec_filtrado = df_rec_filtrado[df_rec_filtrado['mes_comp_nome'] == filtro_mes_rec]
+
+                st.markdown(f"**Encontradas:** {len(df_rec_filtrado)} receitas no período selecionado.")
+                
+                if not df_rec_filtrado.empty:
+                    st.markdown("💡 **Dica:** Altere os dados de qualquer receita na tabela abaixo e clique no botão de Salvar. Para apagar, marque a caixa Excluir na primeira coluna.")
+                    
+                    df_rec_edit = df_rec_filtrado.copy()
+                    df_rec_edit.insert(0, "🗑️ Excluir", False)
+                    df_rec_edit['data_liquidacao'] = pd.to_datetime(df_rec_edit['data_liquidacao']).dt.date
+                    df_rec_edit = df_rec_edit.sort_values("data_liquidacao", ascending=False)
+                    
+                    lista_cats_rec = carregar_lista_categorias()
+                    lista_anos_comp_rec = gerar_lista_anos()
+                    lista_meses_comp_rec = list(MESES_PT.values())
+
+                    editor_rec = st.data_editor(
+                        df_rec_edit,
+                        use_container_width=True,
+                        hide_index=True,
+                        disabled=["data_registro", "tipo", "competencia", "mes_comp_num", "fornecedor"],
+                        column_config={
+                            "🗑️ Excluir": st.column_config.CheckboxColumn("Excluir?", required=True),
+                            "data_liquidacao": st.column_config.DateColumn("Data Recebimento", format="DD/MM/YYYY"),
+                            "valor": st.column_config.NumberColumn("Valor (R$)", format="R$ %.2f", min_value=0.0),
+                            "categoria": st.column_config.SelectboxColumn("Categoria", options=lista_cats_rec),
+                            "status": st.column_config.SelectboxColumn("Status", options=["Recebido", "A Receber"]),
+                            "ano_comp": st.column_config.SelectboxColumn("Ano Comp.", options=lista_anos_comp_rec),
+                            "mes_comp_nome": st.column_config.SelectboxColumn("Mês Comp.", options=lista_meses_comp_rec),
+                            "observacao": st.column_config.TextColumn("Observação"),
+                            "data_registro": None, 
+                            "tipo": None,
+                            "competencia": None, 
+                            "mes_comp_num": None,
+                            "fornecedor": None
+                        }
+                    )
+
+                    mudancas_rec = {}
+                    excluir_rec = []
+
+                    for idx in df_rec_edit.index:
+                        linha_orig = df_rec_edit.loc[idx]
+                        linha_edit = editor_rec.loc[idx]
+
+                        if linha_edit["🗑️ Excluir"]:
+                            excluir_rec.append(idx)
+                            continue
+
+                        alteracoes = {}
+                        if str(linha_orig['data_liquidacao']) != str(linha_edit['data_liquidacao']):
+                            alteracoes['data_liquidacao'] = pd.to_datetime(linha_edit['data_liquidacao']).strftime("%Y-%m-%d")
+                        if str(linha_orig['categoria']) != str(linha_edit['categoria']):
+                            alteracoes['categoria'] = linha_edit['categoria']
+                        if str(linha_orig['status']) != str(linha_edit['status']):
+                            alteracoes['status'] = linha_edit['status']
+                        if float(linha_orig['valor']) != float(linha_edit['valor']):
+                            alteracoes['valor'] = float(linha_edit['valor'])
+                        if str(linha_orig['mes_comp_nome']) != str(linha_edit['mes_comp_nome']) or str(linha_orig['ano_comp']) != str(linha_edit['ano_comp']):
+                            mes_num = MESES_PT_INV[linha_edit['mes_comp_nome']]
+                            alteracoes['competencia'] = f"{linha_edit['ano_comp']}-{mes_num:02d}"
+                        
+                        obs_orig = "" if pd.isna(linha_orig['observacao']) else str(linha_orig['observacao'])
+                        obs_edit = "" if pd.isna(linha_edit['observacao']) else str(linha_edit['observacao'])
+                        if obs_orig != obs_edit:
+                            alteracoes['observacao'] = obs_edit
+
+                        if alteracoes:
+                            mudancas_rec[idx] = alteracoes
+
+                    if mudancas_rec or excluir_rec:
+                        st.markdown("---")
+                        c_btn1, c_btn2 = st.columns(2)
+                        with c_btn1:
+                            if mudancas_rec:
+                                if st.button(f"💾 Salvar {len(mudancas_rec)} Alteração(ões)", key="btn_salvar_rec", type="primary", use_container_width=True):
+                                    editar_multiplos_lancamentos(mudancas_rec)
+                                    st.success("Receita(s) atualizada(s) com sucesso!")
+                                    time.sleep(1.5)
+                                    st.cache_data.clear()
+                                    st.rerun()
+                        with c_btn2:
+                            if excluir_rec:
+                                if st.button(f"🗑️ Excluir {len(excluir_rec)} Receita(s)", key="btn_excluir_rec", type="secondary", use_container_width=True):
+                                    excluir_lancamentos(excluir_rec)
+                                    st.success("Receita(s) excluída(s) com sucesso!")
+                                    time.sleep(1.5)
+                                    st.cache_data.clear()
+                                    st.rerun()
                 else:
-                    valor_float = converter_moeda_br_para_float(valor_str)
-                    mes_num = MESES_PT_INV[mes_rec]
-                    comp_formatada = f"{ano_rec}-{mes_num:02d}"
-                    dados = {
-                        "data_registro": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "tipo": "Receita",
-                        "valor": valor_float,
-                        "fornecedor": "Cliente Final",
-                        "data_liquidacao": data_liq.strftime("%Y-%m-%d"),
-                        "competencia": comp_formatada,
-                        "status": "Recebido",
-                        "categoria": "Vendas",
-                        "observacao": obs
-                    }
-                    salvar_lancamento(dados)
-                    st.success("Receita registrada! Limpando em 3 segundos...")
-                    time.sleep(3)
-                    st.session_state["limpar_receita_agora"] = True
-                    st.cache_data.clear()
-                    st.rerun()
+                    st.info("Nenhuma receita encontrada para os filtros aplicados.")
+            else:
+                st.info("Nenhuma receita cadastrada ainda no sistema.")
 
     # --- ABA: RELATÓRIOS ---
     elif menu == "Relatórios":
@@ -833,23 +956,24 @@ if check_password():
                 st.markdown("---")
 
                 # 2. Filtros Adicionais na Barra Lateral (Sidebar)
+                # IMPORTANTE: Configurados para iniciar vazios para evitar ocultação acidental de novos dados
                 st.sidebar.markdown("### Outros Filtros do Relatório")
-                filtro_tipo = st.sidebar.multiselect("Tipo", options=["Receita", "Despesa"], default=["Receita", "Despesa"])
+                filtro_tipo = st.sidebar.multiselect("Tipo", options=["Receita", "Despesa"], placeholder="Todos")
                 
                 categorias_disp = sorted(df['categoria'].dropna().unique())
-                filtro_categoria = st.sidebar.multiselect("Categoria", options=categorias_disp, default=categorias_disp)
+                filtro_categoria = st.sidebar.multiselect("Categoria", options=categorias_disp, placeholder="Todas")
                 
                 if 'status' in df.columns:
                     status_disp = sorted(df['status'].dropna().unique())
                 else:
                     status_disp = []
-                filtro_status = st.sidebar.multiselect("Status", options=status_disp, default=status_disp)
+                filtro_status = st.sidebar.multiselect("Status", options=status_disp, placeholder="Todos")
                 
                 if 'fornecedor' in df.columns:
                     fornecedores_disp = sorted(df['fornecedor'].dropna().astype(str).unique())
                 else:
                     fornecedores_disp = []
-                filtro_fornecedor = st.sidebar.multiselect("Fornecedor", options=fornecedores_disp, default=fornecedores_disp)
+                filtro_fornecedor = st.sidebar.multiselect("Fornecedor", options=fornecedores_disp, placeholder="Todos")
                 
                 st.sidebar.markdown("---")
                 try:
@@ -867,11 +991,12 @@ if check_password():
                 # Aplica o Filtro de Competência da Tela Principal
                 df_filtered = df_filtered[(df_filtered['competencia'] >= comp_inicial) & (df_filtered['competencia'] <= comp_final)]
                 
-                # Aplica os Filtros da Barra Lateral
+                # Aplica os Filtros da Barra Lateral APENAS SE houver algo selecionado
                 if filtro_tipo: df_filtered = df_filtered[df_filtered['tipo'].isin(filtro_tipo)]
                 if filtro_categoria: df_filtered = df_filtered[df_filtered['categoria'].isin(filtro_categoria)]
                 if filtro_status: df_filtered = df_filtered[df_filtered['status'].isin(filtro_status)]
                 if filtro_fornecedor: df_filtered = df_filtered[df_filtered['fornecedor'].isin(filtro_fornecedor)]
+                
                 if isinstance(periodo, tuple) and len(periodo) == 2:
                     df_filtered = df_filtered[(df_filtered['data_liquidacao'].dt.date >= periodo[0]) & (df_filtered['data_liquidacao'].dt.date <= periodo[1])]
 
