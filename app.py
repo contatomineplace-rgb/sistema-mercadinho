@@ -35,6 +35,13 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 def carregar_dados():
     try:
         df = conn.read(worksheet="lancamentos", ttl=600)
+        if not df.empty:
+            # Faxina Global: Remove espaços invisíveis que causam falhas nos filtros
+            colunas_str = ['tipo', 'competencia', 'categoria', 'status', 'fornecedor']
+            for col in colunas_str:
+                if col in df.columns:
+                    df[col] = df[col].fillna("").astype(str).str.strip()
+                    df.loc[df[col] == 'nan', col] = ""
         return df
     except Exception as e:
         st.error(f"Erro de conexão com o banco de dados (Lançamentos): {e}")
@@ -44,7 +51,6 @@ def carregar_dados():
 def carregar_fornecedores_df():
     try:
         df = conn.read(worksheet="fornecedores", ttl=600)
-        # Adicionado o campo 'categoria_padrao'
         colunas_necessarias = ['nome', 'cnpj', 'telefone', 'login_app', 'senha_app', 'categoria_padrao']
         for col in colunas_necessarias:
             if col not in df.columns:
@@ -206,6 +212,14 @@ def auto_preencher_cat_individual():
         cats = carregar_lista_categorias()
         if c in cats:
             st.session_state["cat_desp"] = c
+
+def formatar_comp(c):
+    """Função global para formatar o texto da competência nos menus suspensos."""
+    try:
+        ano, mes = str(c).split('-')
+        return f"{MESES_PT[int(mes)]}/{ano}"
+    except:
+        return str(c)
 
 # --- FUNÇÕES DE AUTENTICAÇÃO E LOGIN ---
 def gerar_token_auth():
@@ -427,14 +441,12 @@ if check_password():
                 f = str(row['fornecedor']).strip() if pd.notna(row['fornecedor']) else ""
                 c = str(row['categoria']).strip() if pd.notna(row['categoria']) else ""
                 
-                # Se tem fornecedor, mas não tem categoria, aplica a sugestão padrão
                 if f and not c:
                     cat_sug = d_forn_cat.get(f, "")
                     if cat_sug and cat_sug in lista_categorias_cadastradas:
                         df_verificacao.at[idx, 'categoria'] = cat_sug
                         mudou_lote = True
 
-            # Se houve alguma alteração automática, nós resetamos o editor para mostrar o preenchimento
             if mudou_lote:
                 st.session_state.df_lote = df_verificacao
                 if "editor_lote" in st.session_state:
@@ -481,11 +493,8 @@ if check_password():
                     if lista_dados_finais and not erro_encontrado:
                         salvar_lote_lancamentos(pd.DataFrame(lista_dados_finais))
                         st.success(f"{len(lista_dados_finais)} despesas salvas com sucesso!")
-                        # Limpando o formulário para a próxima vez
-                        if "df_lote" in st.session_state:
-                            del st.session_state["df_lote"]
-                        if "editor_lote" in st.session_state:
-                            del st.session_state["editor_lote"]
+                        if "df_lote" in st.session_state: del st.session_state["df_lote"]
+                        if "editor_lote" in st.session_state: del st.session_state["editor_lote"]
                         time.sleep(2)
                         st.cache_data.clear()
                         st.rerun()
@@ -609,7 +618,7 @@ if check_password():
                     anos_disponiveis = sorted(df_dados['competencia'].str[:4].unique())
                     filtro_ano = st.multiselect("Filtrar por Ano", anos_disponiveis)
                 with col_f2:
-                    meses_disponiveis = sorted(df_dados['competencia'].str[5:].unique())
+                    meses_disponiveis = sorted(df_dados['competencia'].str[5:7].unique())
                     filtro_mes = st.multiselect("Filtrar por Mês (Numérico)", meses_disponiveis)
                 with col_f3:
                     if not df_dados['valor'].empty:
@@ -631,7 +640,7 @@ if check_password():
                 df_filtrado = df_filtrado[df_filtrado['tipo'] == 'Despesa']
                 
                 if filtro_ano: df_filtrado = df_filtrado[df_filtrado['competencia'].str[:4].isin(filtro_ano)]
-                if filtro_mes: df_filtrado = df_filtrado[df_filtrado['competencia'].str[5:].isin(filtro_mes)]
+                if filtro_mes: df_filtrado = df_filtrado[df_filtrado['competencia'].str[5:7].isin(filtro_mes)]
                 df_filtrado = df_filtrado[(df_filtrado['valor'] >= filtro_valor[0]) & (df_filtrado['valor'] <= filtro_valor[1])]
                 if filtro_forn: df_filtrado = df_filtrado[df_filtrado['fornecedor'].isin(filtro_forn)]
                 if filtro_cat: df_filtrado = df_filtrado[df_filtrado['categoria'].isin(filtro_cat)]
@@ -688,7 +697,7 @@ if check_password():
                                     nova_data = st.date_input("Data de Liquidação", value=pd.to_datetime(linha_atual['data_liquidacao']).date(), format="DD/MM/YYYY")
                                     
                                     ano_atual = str(linha_atual['competencia'])[:4]
-                                    mes_atual_num = int(str(linha_atual['competencia'])[5:])
+                                    mes_atual_num = int(str(linha_atual['competencia'])[5:7])
                                     mes_atual_nome = MESES_PT[mes_atual_num]
                                     
                                     novo_mes = st.selectbox("Mês de Competência", list(MESES_PT.values()), index=list(MESES_PT.values()).index(mes_atual_nome))
@@ -795,28 +804,26 @@ if check_password():
                 df_rec = df_rec[df_rec['tipo'] == 'Receita'].copy()
                 
             if not df_rec.empty:
-                df_rec['ano_comp'] = df_rec['competencia'].str[:4]
-                df_rec['mes_comp_num'] = df_rec['competencia'].str[5:7].astype(int)
-                df_rec['mes_comp_nome'] = df_rec['mes_comp_num'].map(MESES_PT)
+                comps_ordenadas = sorted(df_rec['competencia'].dropna().unique())
+                if not comps_ordenadas: 
+                    comps_ordenadas = [f"{datetime.now().year}-{datetime.now().month:02d}"]
 
-                col_fr1, col_fr2 = st.columns(2)
-                anos_disponiveis = sorted(df_rec['ano_comp'].dropna().unique(), reverse=True)
-                if not anos_disponiveis: anos_disponiveis = [str(datetime.today().year)]
-                filtro_ano_rec = col_fr1.selectbox("Filtrar por Ano", ["Todos"] + list(anos_disponiveis))
+                st.markdown("### 📅 Filtro de Competência (Receitas)")
+                col_c1, col_c2 = st.columns(2)
+                with col_c1:
+                    comp_inicial = st.selectbox("De (Mês/Ano):", options=comps_ordenadas, index=0, format_func=formatar_comp, key="rec_ini")
+                with col_c2:
+                    comp_final = st.selectbox("Até (Mês/Ano):", options=comps_ordenadas, index=len(comps_ordenadas)-1, format_func=formatar_comp, key="rec_fim")
                 
-                meses_disponiveis = list(MESES_PT.values())
-                filtro_mes_rec = col_fr2.selectbox("Filtrar por Mês", ["Todos"] + meses_disponiveis)
+                if comp_inicial > comp_final:
+                    comp_final = comp_inicial
 
-                df_rec_filtrado = df_rec.copy()
-                if filtro_ano_rec != "Todos":
-                    df_rec_filtrado = df_rec_filtrado[df_rec_filtrado['ano_comp'] == filtro_ano_rec]
-                if filtro_mes_rec != "Todos":
-                    df_rec_filtrado = df_rec_filtrado[df_rec_filtrado['mes_comp_nome'] == filtro_mes_rec]
+                df_rec_filtrado = df_rec[(df_rec['competencia'] >= comp_inicial) & (df_rec['competencia'] <= comp_final)].copy()
 
                 st.markdown(f"**Encontradas:** {len(df_rec_filtrado)} receitas no período selecionado.")
                 
                 if not df_rec_filtrado.empty:
-                    st.markdown("💡 **Dica:** Altere os dados de qualquer receita na tabela abaixo e clique no botão de Salvar. Para apagar, marque a caixa Excluir na primeira coluna.")
+                    st.markdown("💡 **Dica:** Altere os dados diretamente na planilha interativa abaixo e clique no botão de Salvar. Para apagar, marque a caixa Excluir na primeira coluna.")
                     
                     df_rec_edit = df_rec_filtrado.copy()
                     df_rec_edit.insert(0, "🗑️ Excluir", False)
@@ -824,6 +831,11 @@ if check_password():
                     df_rec_edit = df_rec_edit.sort_values("data_liquidacao", ascending=False)
                     
                     lista_cats_rec = carregar_lista_categorias()
+                    lista_forn_rec = carregar_lista_nomes_fornecedores()
+                    
+                    df_rec_edit['ano_comp'] = df_rec_edit['competencia'].str[:4]
+                    df_rec_edit['mes_comp_num'] = df_rec_edit['competencia'].str[5:7].astype(int)
+                    df_rec_edit['mes_comp_nome'] = df_rec_edit['mes_comp_num'].map(MESES_PT)
                     lista_anos_comp_rec = gerar_lista_anos()
                     lista_meses_comp_rec = list(MESES_PT.values())
 
@@ -831,11 +843,12 @@ if check_password():
                         df_rec_edit,
                         use_container_width=True,
                         hide_index=True,
-                        disabled=["data_registro", "tipo", "competencia", "mes_comp_num", "fornecedor"],
+                        disabled=["data_registro", "tipo", "competencia", "mes_comp_num"],
                         column_config={
                             "🗑️ Excluir": st.column_config.CheckboxColumn("Excluir?", required=True),
                             "data_liquidacao": st.column_config.DateColumn("Data Recebimento", format="DD/MM/YYYY"),
                             "valor": st.column_config.NumberColumn("Valor (R$)", format="R$ %.2f", min_value=0.0),
+                            "fornecedor": st.column_config.SelectboxColumn("Fornecedor/Cliente", options=lista_forn_rec),
                             "categoria": st.column_config.SelectboxColumn("Categoria", options=lista_cats_rec),
                             "status": st.column_config.SelectboxColumn("Status", options=["Recebido", "A Receber"]),
                             "ano_comp": st.column_config.SelectboxColumn("Ano Comp.", options=lista_anos_comp_rec),
@@ -843,9 +856,8 @@ if check_password():
                             "observacao": st.column_config.TextColumn("Observação"),
                             "data_registro": None, 
                             "tipo": None,
-                            "competencia": None, 
-                            "mes_comp_num": None,
-                            "fornecedor": None
+                            "competencia": None,
+                            "mes_comp_num": None
                         }
                     )
 
@@ -865,6 +877,8 @@ if check_password():
                             alteracoes['data_liquidacao'] = pd.to_datetime(linha_edit['data_liquidacao']).strftime("%Y-%m-%d")
                         if str(linha_orig['categoria']) != str(linha_edit['categoria']):
                             alteracoes['categoria'] = linha_edit['categoria']
+                        if str(linha_orig['fornecedor']) != str(linha_edit['fornecedor']):
+                            alteracoes['fornecedor'] = linha_edit['fornecedor']
                         if str(linha_orig['status']) != str(linha_edit['status']):
                             alteracoes['status'] = linha_edit['status']
                         if float(linha_orig['valor']) != float(linha_edit['valor']):
@@ -918,7 +932,7 @@ if check_password():
             df['valor'] = pd.to_numeric(df['valor'])
             df['data_liquidacao'] = pd.to_datetime(df['data_liquidacao'], errors='coerce')
             df['ano_comp'] = df['competencia'].str[:4]
-            df['mes_comp_num'] = df['competencia'].str[5:].astype(int)
+            df['mes_comp_num'] = df['competencia'].str[5:7].astype(int)
             df['mes_comp_nome'] = df['mes_comp_num'].map(MESES_PT)
 
             # Abas para separar os relatórios
@@ -932,13 +946,6 @@ if check_password():
             with tab_dash:
                 # 1. Filtros Principais na Tela (Acima dos gráficos)
                 st.markdown("### 📅 Filtro de Competência")
-                
-                def formatar_comp(c):
-                    try:
-                        ano, mes = c.split('-')
-                        return f"{MESES_PT[int(mes)]}/{ano}"
-                    except:
-                        return c
                 
                 comps_ordenadas = sorted(df['competencia'].dropna().unique())
                 if not comps_ordenadas: 
