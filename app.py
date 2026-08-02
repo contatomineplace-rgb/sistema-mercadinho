@@ -1535,6 +1535,7 @@ if check_password():
 
                         df_sistema = carregar_dados()
                         df_sistema = df_sistema[df_sistema['tipo'] == 'Despesa'].copy()
+                        df_sistema['orig_index'] = df_sistema.index
                         
                         df_sistema['CHAVE_DATA'] = pd.to_datetime(df_sistema['data_liquidacao']).dt.date.astype(str).str.strip()
                         df_sistema['CHAVE_VALOR'] = df_sistema['valor'].apply(lambda x: "{:.2f}".format(x))
@@ -1685,10 +1686,77 @@ if check_password():
                         with tab_ok:
                             if not df_conciliados.empty:
                                 st.success("As despesas abaixo foram localizadas tanto no extrato bancário quanto no seu sistema:")
-                                view_ok = df_conciliados[['Data', 'Historico', 'Valor_Absoluto', 'fornecedor', 'categoria']].copy()
-                                view_ok.columns = ['📅 Data', '🏦 Histórico (Banco)', '💵 Valor', '🛒 Fornecedor (Sistema)', '📂 Categoria (Sistema)']
-                                view_ok['📅 Data'] = pd.to_datetime(view_ok['📅 Data']).dt.strftime('%d/%m/%Y')
-                                st.dataframe(view_ok, use_container_width=True, column_config={"💵 Valor": st.column_config.NumberColumn(format="R$ %.2f")}, hide_index=True)
+                                
+                                df_conc_edit = df_conciliados[['orig_index', 'Data', 'Historico', 'Valor_Absoluto', 'fornecedor', 'categoria', 'competencia', 'status', 'observacao']].copy()
+                                
+                                df_conc_edit['ano_comp'] = df_conc_edit['competencia'].str[:4]
+                                df_conc_edit['mes_comp_num'] = df_conc_edit['competencia'].str[5:7].astype(int)
+                                df_conc_edit['mes_comp_nome'] = df_conc_edit['mes_comp_num'].map(MESES_PT)
+                                
+                                df_conc_edit['Data'] = pd.to_datetime(df_conc_edit['Data']).dt.date
+                                
+                                lista_forn_conc = carregar_lista_nomes_fornecedores()
+                                lista_cats_conc = carregar_lista_categorias()
+                                lista_anos_comp_conc = gerar_lista_anos()
+                                lista_meses_comp_conc = list(MESES_PT.values())
+                                
+                                editor_conc = st.data_editor(
+                                    df_conc_edit,
+                                    use_container_width=True,
+                                    hide_index=True,
+                                    disabled=["orig_index", "Data", "Historico", "Valor_Absoluto", "competencia", "mes_comp_num"],
+                                    column_config={
+                                        "orig_index": None, 
+                                        "competencia": None, 
+                                        "mes_comp_num": None, 
+                                        "Data": st.column_config.DateColumn("📅 Data (Banco)", format="DD/MM/YYYY"),
+                                        "Historico": st.column_config.TextColumn("🏦 Histórico (Banco)"),
+                                        "Valor_Absoluto": st.column_config.NumberColumn("💵 Valor", format="R$ %.2f"),
+                                        "fornecedor": st.column_config.SelectboxColumn("🛒 Fornecedor (Sistema)", options=lista_forn_conc, required=True),
+                                        "categoria": st.column_config.SelectboxColumn("📂 Categoria (Sistema)", options=lista_cats_conc, required=True),
+                                        "status": st.column_config.SelectboxColumn("Status", options=["Pago", "A Pagar"], required=True),
+                                        "ano_comp": st.column_config.SelectboxColumn("Ano Comp.", options=lista_anos_comp_conc, required=True),
+                                        "mes_comp_nome": st.column_config.SelectboxColumn("Mês Comp.", options=lista_meses_comp_conc, required=True),
+                                        "observacao": st.column_config.TextColumn("Observação")
+                                    }
+                                )
+                                
+                                mudancas_conc = {}
+                                
+                                for idx in df_conc_edit.index:
+                                    linha_orig = df_conc_edit.loc[idx]
+                                    linha_edit = editor_conc.loc[idx]
+                                    db_index = linha_orig['orig_index'] 
+                                    
+                                    alteracoes = {}
+                                    if str(linha_orig['fornecedor']) != str(linha_edit['fornecedor']):
+                                        alteracoes['fornecedor'] = linha_edit['fornecedor']
+                                    if str(linha_orig['categoria']) != str(linha_edit['categoria']):
+                                        alteracoes['categoria'] = linha_edit['categoria']
+                                    if str(linha_orig['status']) != str(linha_edit['status']):
+                                        alteracoes['status'] = linha_edit['status']
+                                    
+                                    if str(linha_orig['mes_comp_nome']) != str(linha_edit['mes_comp_nome']) or str(linha_orig['ano_comp']) != str(linha_edit['ano_comp']):
+                                        mes_num = MESES_PT_INV[linha_edit['mes_comp_nome']]
+                                        alteracoes['competencia'] = f"{linha_edit['ano_comp']}-{mes_num:02d}"
+                                    
+                                    obs_orig = "" if pd.isna(linha_orig['observacao']) else str(linha_orig['observacao'])
+                                    obs_edit = "" if pd.isna(linha_edit['observacao']) else str(linha_edit['observacao'])
+                                    if obs_orig != obs_edit:
+                                        alteracoes['observacao'] = obs_edit
+                                        
+                                    if alteracoes:
+                                        mudancas_conc[db_index] = alteracoes
+                                        
+                                if mudancas_conc:
+                                    st.markdown("---")
+                                    if st.button(f"💾 Salvar {len(mudancas_conc)} Alteração(ões) nos Conciliados", type="primary"):
+                                        editar_multiplos_lancamentos(mudancas_conc)
+                                        st.success("Lançamento(s) conciliado(s) atualizado(s) com sucesso!")
+                                        time.sleep(1.5)
+                                        st.cache_data.clear()
+                                        st.rerun()
+                                
                             else:
                                 st.error("Nenhum lançamento foi conciliado. (Talvez o arquivo anexado não contemple os dias das despesas lançadas).")
                     
