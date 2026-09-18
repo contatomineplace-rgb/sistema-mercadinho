@@ -36,8 +36,8 @@ def carregar_dados():
     try:
         df = conn.read(worksheet="lancamentos", ttl=600)
         if not df.empty:
-            # 1. Faxina Global de Textos (Remove espaços invisíveis e padroniza as caixas)
-            colunas_str = ['tipo', 'competencia', 'categoria', 'status', 'fornecedor']
+            # 1. Faxina Global de Textos: PREVINE ERROS DO PYARROW (StreamlitAPIException)
+            colunas_str = ['tipo', 'competencia', 'categoria', 'status', 'fornecedor', 'observacao', 'data_registro']
             for col in colunas_str:
                 if col in df.columns:
                     df[col] = df[col].fillna("").astype(str).str.strip()
